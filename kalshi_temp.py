@@ -422,10 +422,17 @@ def build_event_data(ev, markets):
         mu_raw = weighted_mean(series, ecmwf, gfs)
         if mu_raw is None:
             mu_raw = sum(sources) / len(sources)
-        # NWS is fetched and displayed for reference + future audit, but is NOT
-        # blended into the model. The BIAS table was fit on ECMWF+GFS weighted_mean
-        # only, so adding NWS here would create a known statistical inconsistency.
-        # See forward NWS logging (nws_log.jsonl) for future weight calibration.
+        # NWS forecast is the most station-specific source (Kalshi resolves on
+        # the NWS Climatological Report at the same station). Blended at 30%.
+        # KNOWN LIMITATION: the BIAS table was fit on ECMWF+GFS weighted_mean
+        # only — historical NWS forecasts aren't archived by Open-Meteo, so we
+        # can't backtest with NWS in the blend. Adding NWS here introduces a
+        # residual bias of ~0.3 * (NWS_bias - BIAS[series]), expected to be
+        # small (< ~0.5°F) but uncalibrated. Forward logging to nws_log.jsonl
+        # will let us refit BIAS for the blended model after ~30 settled events
+        # per city accumulate (~4-6 weeks).
+        if nws is not None:
+            mu_raw = 0.7 * mu_raw + 0.3 * nws
         bias = BIAS.get(series, 0.0)
         mu = mu_raw - bias
         spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
@@ -649,7 +656,7 @@ function render(data) {
     html += `<div class="summary">`;
     html += `<span>Resolves: <b>${ev.target_date}</b></span>`;
     html += `<span>Station: <b>${ev.station}</b></span>`;
-    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · METAR <b>${fmt(f.metar)}</b>`;
+    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · NWS <b>${fmt(f.nws)}</b> · METAR <b>${fmt(f.metar)}</b>`;
     if (f.today_max != null) html += ` · TODAY-MAX <b>${fmt(f.today_max)}</b>`;
     html += `</span>`;
     if (m.mu != null) {
@@ -704,6 +711,7 @@ function renderPredict(d, out) {
   html += `<div class="kv">${d.station}</div>`;
   html += `<div><span class="kv">ECMWF <b>${fmt(f.ecmwf)}</b></span>`;
   html += `<span class="kv">GFS/HRRR <b>${fmt(f.gfs)}</b></span>`;
+  html += `<span class="kv">NWS <b>${fmt(f.nws)}</b></span>`;
   html += `<span class="kv">METAR <b>${fmt(f.metar)}</b></span>`;
   if (f.today_max != null) html += `<span class="kv">TODAY-MAX <b>${fmt(f.today_max)}</b></span>`;
   html += `</div>`;
@@ -1052,7 +1060,7 @@ def cmd_predict(args):
     print(f"Event:    {data['title']}")
     print(f"Resolves: {data['target_date']} at {data['station']}")
     print(f"Forecasts (°F): ECMWF {_fmtf(f['ecmwf'])}  GFS/HRRR {_fmtf(f['gfs'])}  "
-          f"METAR {_fmtf(f['metar'])}")
+          f"NWS {_fmtf(f['nws'])}  METAR {_fmtf(f['metar'])}")
     m = data["model"]
     if m.get("mu") is not None:
         print(f"Model: mu={m['mu']:.2f}°F  sigma={m['sigma']:.2f}°F  sources={m.get('sources')}")
