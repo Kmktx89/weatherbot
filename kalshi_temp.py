@@ -212,8 +212,8 @@ def fetch_kalshi_candlestick(series, ticker, start_ts, end_ts, period_minutes=60
         return []
 
 
-def yes_ask_at(series, ticker, decision_ts):
-    """YES ask price at decision_ts (or the closest bar ≤ that time)."""
+def yes_prices_at(series, ticker, decision_ts):
+    """Return (yes_ask, yes_bid) at decision_ts, picking the closest bar ≤ that time."""
     window = 6 * 3600
     bars = fetch_kalshi_candlestick(series, ticker,
                                     decision_ts - window, decision_ts + 600, 60)
@@ -222,8 +222,14 @@ def yes_ask_at(series, ticker, decision_ts):
         if b["end_period_ts"] <= decision_ts + 600:
             best = b
     if best:
-        return to_float((best.get("yes_ask") or {}).get("close_dollars"))
-    return None
+        return (to_float((best.get("yes_ask") or {}).get("close_dollars")),
+                to_float((best.get("yes_bid") or {}).get("close_dollars")))
+    return None, None
+
+
+def yes_ask_at(series, ticker, decision_ts):
+    """YES ask price at decision_ts (or the closest bar ≤ that time)."""
+    return yes_prices_at(series, ticker, decision_ts)[0]
 
 
 def fetch_nws_high(lat, lon, target_date):
@@ -720,10 +726,10 @@ async function runBacktest(e) {
   const threshold = document.getElementById('b-threshold').value;
   const lead = document.getElementById('b-lead').value;
   const out = document.getElementById('b-out');
-  if (!series && !events) { out.textContent = 'Choose a series or list events.'; return; }
   const btn = e.target.querySelector('button[type=submit]');
   btn.disabled = true;
-  out.textContent = 'Running… (this can take 10–30s for 10+ events)';
+  const scope = events ? 'event list' : (series ? series : 'all series');
+  out.textContent = `Running ${scope}… (all-series @ 60 days can take ~5 minutes)`;
   const params = new URLSearchParams({days, threshold, lead_hours: lead});
   if (series) params.set('series', series);
   if (events) params.set('events', events);
@@ -740,31 +746,47 @@ async function runBacktest(e) {
 }
 
 function renderBacktest(d, out) {
-  const s = d.summary || {};
-  let html = `<div><b>${s.bets || 0}</b> bets / ${d.params.n_events} events · `
-           + `<b>${s.wins || 0}</b> wins (${((s.win_rate||0)*100).toFixed(1)}%) · `
-           + `P/L <b class="${(s.total_pnl||0) >= 0 ? 'pos' : 'neg'}">$${(s.total_pnl||0).toFixed(3)}</b> · `
-           + `Max DD <b>$${(s.max_drawdown||0).toFixed(3)}</b> · `
-           + `avg $${(s.avg_pnl||0).toFixed(4)}</div>`;
-  if (s.skip_reasons && Object.keys(s.skip_reasons).length) {
-    html += `<div class="dim">Skipped: ` +
-      Object.entries(s.skip_reasons).map(([k,n]) => `${n}× ${k}`).join(' · ') + `</div>`;
-  }
-  html += `<table><thead><tr><th>Event</th><th>Pick</th><th>Winner</th><th>P</th>`
-        + `<th>Entry</th><th>P/L</th></tr></thead><tbody>`;
+  const ys = (d.summaries && d.summaries.yes) || {};
+  const ns = (d.summaries && d.summaries.no)  || {};
+  const summaryRow = (label, s) => {
+    if (!s.bets) {
+      const skip = s.skip_reasons ? Object.entries(s.skip_reasons).map(([k,n]) => `${n}× ${k}`).join(' · ') : '';
+      return `<div><b>${label}:</b> no bets${skip ? ' · <span class="dim">' + skip + '</span>' : ''}</div>`;
+    }
+    return `<div><b>${label}:</b> ${s.bets} bets · ${s.wins} wins (${(s.win_rate*100).toFixed(1)}%) · `
+         + `P/L <b class="${s.total_pnl >= 0 ? 'pos' : 'neg'}">$${s.total_pnl.toFixed(3)}</b> · `
+         + `avg $${s.avg_pnl.toFixed(3)} · max DD $${s.max_drawdown.toFixed(3)}</div>`;
+  };
+  let html = summaryRow('YES (high temp)', ys) + summaryRow('NO (best EV)', ns);
+
+  html += `<table><thead><tr>
+    <th>Event</th><th>Winner</th>
+    <th>YES pick</th><th>YES P</th><th>YES entry</th><th>YES P/L</th>
+    <th>NO pick</th><th>NO P_no</th><th>NO entry</th><th>NO P/L</th>
+  </tr></thead><tbody>`;
   for (const r of d.results) {
     if (r.skipped) {
-      html += `<tr><td>${r.event}</td><td colspan="5" class="dim">skipped: ${r.skipped}</td></tr>`;
-    } else {
-      const won = r.won;
-      html += `<tr><td>${r.event}</td>`
-            + `<td class="${won ? 'pos' : 'neg'}">${r.picked_bucket}</td>`
-            + `<td>${r.winner_bucket}</td>`
-            + `<td>${(r.model_prob*100).toFixed(1)}%</td>`
-            + `<td>$${r.entry_price.toFixed(2)}</td>`
-            + `<td class="${r.pnl >= 0 ? 'pos' : 'neg'}">${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(3)}</td>`
-            + `</tr>`;
+      html += `<tr><td>${r.event}</td><td colspan="9" class="dim">skipped: ${r.skipped}</td></tr>`;
+      continue;
     }
+    const yo = r.yes || {};
+    const no = r.no || {};
+    const ycell = (k, fn) => yo.skipped ? '' : fn(yo[k]);
+    const ncell = (k, fn) => no.skipped ? '' : fn(no[k]);
+    html += `<tr><td>${r.event}</td><td>${r.winner_bucket}</td>`;
+    // YES columns
+    if (yo.skipped) html += `<td colspan="4" class="dim">skip: ${yo.skipped}</td>`;
+    else html += `<td class="${yo.won ? 'pos' : 'neg'}">${yo.picked_bucket}</td>`
+             + `<td>${(yo.model_prob*100).toFixed(1)}%</td>`
+             + `<td>$${yo.entry_price.toFixed(2)}</td>`
+             + `<td class="${yo.pnl >= 0 ? 'pos' : 'neg'}">${yo.pnl >= 0 ? '+' : ''}${yo.pnl.toFixed(3)}</td>`;
+    // NO columns
+    if (no.skipped) html += `<td colspan="4" class="dim">skip: ${no.skipped}</td>`;
+    else html += `<td class="${no.won ? 'pos' : 'neg'}">${no.picked_bucket}</td>`
+             + `<td>${(no.model_prob_no*100).toFixed(1)}%</td>`
+             + `<td>$${no.entry_price.toFixed(2)}</td>`
+             + `<td class="${no.pnl >= 0 ? 'pos' : 'neg'}">${no.pnl >= 0 ? '+' : ''}${no.pnl.toFixed(3)}</td>`;
+    html += `</tr>`;
   }
   html += `</tbody></table>`;
   out.innerHTML = html;
@@ -832,13 +854,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(400, "application/json",
                                json.dumps({"error": "no events resolved — provide series or events"}).encode())
                     return
-                results, summary = run_backtest(tickers, lead_hours, threshold)
+                results, summaries = run_backtest(tickers, lead_hours, threshold)
                 payload = {
                     "params": {"series": series, "events": events, "days": days,
                                "lead_hours": lead_hours, "threshold": threshold,
                                "n_events": len(tickers)},
                     "results": results,
-                    "summary": summary,
+                    "summaries": summaries,
                 }
                 self._send(200, "application/json", json.dumps(payload).encode())
             except Exception as e:
@@ -1073,7 +1095,10 @@ def list_events_for_series(series, days, status_options=("settled",)):
 
 
 def backtest_one_event(event_ticker, lead_hours, threshold):
-    """Returns a dict describing the simulated bet for one event, or {'skipped': reason}."""
+    """Run both YES (highest model-prob bucket) and NO (best-EV-NO with sanity cap)
+    strategies on a single settled event. Returns one dict with 'yes' and 'no'
+    sub-outcomes, or {'skipped': reason} if the event is unusable.
+    """
     series = event_ticker.split("-")[0]
     city = CITIES.get(series)
     if not city:
@@ -1118,56 +1143,133 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
             ranked.append((m, p))
     if not ranked:
         return {"event": event_ticker, "skipped": "no_probability"}
-    ranked.sort(key=lambda x: x[1], reverse=True)
-    pick, pick_p = ranked[0]
-    if pick_p < threshold:
-        return {"event": event_ticker, "skipped": f"below_threshold({pick_p:.2f})"}
 
-    # decision time = close_time - lead_hours
     try:
-        close_dt = datetime.fromisoformat(pick["close_time"].replace("Z", "+00:00"))
+        close_dt = datetime.fromisoformat(markets[0]["close_time"].replace("Z", "+00:00"))
     except Exception:
         return {"event": event_ticker, "skipped": "no_close_time"}
     decision_ts = int(close_dt.timestamp() - lead_hours * 3600)
+    winner_ticker = winner["ticker"]
 
-    price = yes_ask_at(series, pick["ticker"], decision_ts)
-    if price is None or price <= 0 or price >= 1.0:
-        return {"event": event_ticker, "skipped": "no_price"}
+    # Fetch T-lead_hours prices for every bucket (shared by both strategies)
+    bucket_prices = {}
+    for m, _ in ranked:
+        bucket_prices[m["ticker"]] = yes_prices_at(series, m["ticker"], decision_ts)
 
-    won = pick.get("result") == "yes"
-    pnl = (1.0 - price) if won else (-price)
+    yes_out = _eval_yes_strategy(ranked, threshold, bucket_prices, winner_ticker)
+    no_out  = _eval_no_strategy(ranked, threshold, bucket_prices, winner_ticker)
+
     return {
         "event": event_ticker,
         "target_date": target_date,
         "winner_bucket": winner.get("subtitle") or synth_subtitle(winner) or "?",
+        "ecmwf": ecmwf, "gfs": gfs, "mu": mu, "sigma": sigma,
+        "yes": yes_out, "no": no_out,
+    }
+
+
+def _eval_yes_strategy(ranked, threshold, bucket_prices, winner_ticker):
+    """Pick highest model-prob bucket; gate by P_yes >= threshold; entry yes_ask."""
+    sorted_yes = sorted(ranked, key=lambda x: x[1], reverse=True)
+    pick, p = sorted_yes[0]
+    if p < threshold:
+        return {"skipped": f"below_threshold(P={p:.2f})"}
+    yes_ask, _ = bucket_prices.get(pick["ticker"], (None, None))
+    if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
+        return {"skipped": "no_price"}
+    won = pick["ticker"] == winner_ticker
+    pnl = (1.0 - yes_ask) if won else -yes_ask
+    return {
         "picked_ticker": pick["ticker"],
         "picked_bucket": pick.get("subtitle") or synth_subtitle(pick) or "?",
-        "model_prob": pick_p,
-        "ecmwf": ecmwf, "gfs": gfs,
-        "mu": mu, "sigma": sigma,
-        "entry_price": price,
-        "won": won,
-        "pnl": pnl,
+        "model_prob": p,
+        "entry_price": yes_ask,
+        "won": won, "pnl": pnl,
+    }
+
+
+def _eval_no_strategy(ranked, threshold, bucket_prices, winner_ticker):
+    """Pick best-EV-NO bucket using T-lead prices (mirrors the dashboard's 'Best EV NO').
+
+    For each bucket:
+      - Apply sanity cap using T-lead yes_ask (market consensus at decision time)
+      - Compute EV_NO = (1 - p_yes_model) - no_ask, where no_ask ≈ 1 - yes_bid
+      - Gate by P_no >= threshold and EV_NO >= MIN_BEST_EV
+    Pick the bucket with the highest EV_NO. Win = bucket != winner.
+    """
+    candidates = []
+    for m, p in ranked:
+        yes_ask, yes_bid = bucket_prices.get(m["ticker"], (None, None))
+        if yes_ask is None or yes_bid is None:
+            continue
+        if yes_ask >= SANITY_MARKET_CONFIDENT_YES and p <= SANITY_MODEL_LOW_PROB:
+            continue
+        if (1 - p) < threshold:
+            continue
+        no_ask = 1.0 - yes_bid
+        if no_ask <= 0 or no_ask >= 1:
+            continue
+        ev_no = (1 - p) - no_ask
+        if ev_no < MIN_BEST_EV:
+            continue
+        candidates.append((m, p, no_ask, ev_no))
+    if not candidates:
+        return {"skipped": "no_qualifying_no_bet"}
+    candidates.sort(key=lambda x: x[3], reverse=True)
+    pick, p_yes, no_ask, ev_no = candidates[0]
+    won = pick["ticker"] != winner_ticker
+    pnl = (1.0 - no_ask) if won else -no_ask
+    return {
+        "picked_ticker": pick["ticker"],
+        "picked_bucket": pick.get("subtitle") or synth_subtitle(pick) or "?",
+        "model_prob_yes": p_yes,
+        "model_prob_no": 1 - p_yes,
+        "ev_at_entry": ev_no,
+        "entry_price": no_ask,
+        "won": won, "pnl": pnl,
     }
 
 
 def run_backtest(tickers, lead_hours, threshold, *, on_progress=None):
-    """Core backtest loop. on_progress(i, n, result) callback after each event."""
+    """Run backtest for both YES and NO strategies. Returns (results, summaries)
+    where summaries = {'yes': {...}, 'no': {...}}.
+    """
     results = []
     for i, t in enumerate(tickers, 1):
         r = backtest_one_event(t, lead_hours, threshold)
         results.append(r)
         if on_progress is not None:
             on_progress(i, len(tickers), r)
-    bets = [r for r in results if "skipped" not in r]
-    summary = _backtest_summary(bets)
-    skip_reasons = {}
+
+    def _bucket(r, strat):
+        return r.get(strat) if "skipped" not in r else None
+
+    yes_bets, yes_skips = [], {}
+    no_bets,  no_skips  = [], {}
     for r in results:
         if "skipped" in r:
-            key = r["skipped"].split("(")[0]
-            skip_reasons[key] = skip_reasons.get(key, 0) + 1
-    summary["skip_reasons"] = skip_reasons
-    return results, summary
+            k = r["skipped"].split("(")[0]
+            yes_skips[k] = yes_skips.get(k, 0) + 1
+            no_skips[k]  = no_skips.get(k, 0) + 1
+            continue
+        yo = _bucket(r, "yes")
+        no = _bucket(r, "no")
+        if yo and "skipped" in yo:
+            k = yo["skipped"].split("(")[0]
+            yes_skips[k] = yes_skips.get(k, 0) + 1
+        elif yo:
+            yes_bets.append(yo)
+        if no and "skipped" in no:
+            k = no["skipped"].split("(")[0]
+            no_skips[k] = no_skips.get(k, 0) + 1
+        elif no:
+            no_bets.append(no)
+
+    yes_summary = _backtest_summary(yes_bets)
+    yes_summary["skip_reasons"] = yes_skips
+    no_summary = _backtest_summary(no_bets)
+    no_summary["skip_reasons"] = no_skips
+    return results, {"yes": yes_summary, "no": no_summary}
 
 
 def resolve_backtest_tickers(events_str=None, series=None, days=30, *, all_series=False):
@@ -1201,35 +1303,45 @@ def cmd_backtest(args):
             return
         if "skipped" in r:
             print(f"  [{i}/{n}] {r['event']}  SKIPPED ({r['skipped']})")
-        else:
-            tag = "WIN " if r["won"] else "LOSS"
-            print(f"  [{i}/{n}] {r['event']}  {tag}  "
-                  f"pick={r['picked_bucket']:<14} winner={r['winner_bucket']:<14} "
-                  f"P={r['model_prob']*100:5.1f}%  entry=${r['entry_price']:.2f}  "
-                  f"pnl={r['pnl']:+.3f}")
+            return
+        winner = r["winner_bucket"]
+        def fmt_leg(leg):
+            if leg is None: return "—"
+            if "skipped" in leg:
+                return f"skip({leg['skipped'][:18]})"
+            tag = "WIN " if leg["won"] else "LOSS"
+            return f"{tag} {leg['picked_bucket']:<14} entry=${leg['entry_price']:.2f} pnl={leg['pnl']:+.3f}"
+        print(f"  [{i}/{n}] {r['event']}  winner={winner:<14}")
+        print(f"          YES (high temp): {fmt_leg(r.get('yes'))}")
+        print(f"          NO  (best EV):   {fmt_leg(r.get('no'))}")
 
-    results, summary = run_backtest(tickers, args.lead_hours, args.threshold,
-                                    on_progress=report)
+    results, summaries = run_backtest(tickers, args.lead_hours, args.threshold,
+                                      on_progress=report)
+    summary = summaries["yes"]  # legacy name for the YES summary below
+    no_summary = summaries["no"]
 
     if args.json:
-        print(json.dumps({"results": results, "summary": summary}, indent=2))
+        print(json.dumps({"results": results, "summaries": summaries}, indent=2))
         return
 
     print()
-    print("=" * 60)
-    print(f"Events tested:    {len(results)}")
-    print(f"Bets placed:      {summary['bets']}")
-    print(f"Wins:             {summary['wins']} ({summary['win_rate']*100:.1f}%)")
-    print(f"Total P/L:        ${summary['total_pnl']:+.3f}")
-    print(f"Avg P/L per bet:  ${summary['avg_pnl']:+.4f}")
-    print(f"Max drawdown:     ${summary['max_drawdown']:.3f}")
-    print(f"Best win:         ${summary['best_win']:+.3f}")
-    print(f"Worst loss:       ${summary['worst_loss']:+.3f}")
-    if summary.get("skip_reasons"):
+    print("=" * 70)
+    print(f"Events tested: {len(results)}")
+    for label, key in (("YES strategy (high temp)", "yes"),
+                       ("NO strategy (best EV)",    "no")):
+        s = summaries[key]
         print()
-        print("Skipped:")
-        for reason, n in sorted(summary["skip_reasons"].items(), key=lambda x: -x[1]):
-            print(f"  {n:>3} × {reason}")
+        print(f"  {label}")
+        print(f"    Bets placed:     {s['bets']}")
+        if s['bets']:
+            print(f"    Wins:            {s['wins']} ({s['win_rate']*100:.1f}%)")
+            print(f"    Total P/L:       ${s['total_pnl']:+.3f}")
+            print(f"    Avg P/L per bet: ${s['avg_pnl']:+.4f}")
+            print(f"    Max drawdown:    ${s['max_drawdown']:.3f}")
+            print(f"    Best/worst:      ${s['best_win']:+.3f} / ${s['worst_loss']:+.3f}")
+        if s.get("skip_reasons"):
+            top = sorted(s["skip_reasons"].items(), key=lambda x: -x[1])[:5]
+            print(f"    Skipped:         " + ", ".join(f"{n}× {r}" for r, n in top))
 
 
 def _backtest_summary(bets):
