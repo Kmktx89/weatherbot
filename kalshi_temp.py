@@ -246,10 +246,23 @@ def _sort_key(m):
     return floor if floor is not None else (cap or 0)
 
 
+def synth_subtitle(m):
+    """Build a 'X° to Y°' / 'X° or below' label from strike_type + floor/cap."""
+    st = m.get("strike_type")
+    floor, cap = m.get("floor_strike"), m.get("cap_strike")
+    if st == "less" and cap is not None:
+        return f"{cap - 1}° or below"
+    if st == "greater" and floor is not None:
+        return f"{floor + 1}° or above"
+    if st == "between" and floor is not None and cap is not None:
+        return f"{floor}° to {cap}°"
+    return None
+
+
 def _market_summary(m):
     return {
         "ticker": m.get("ticker"),
-        "subtitle": m.get("subtitle"),
+        "subtitle": m.get("subtitle") or synth_subtitle(m) or "?",
         "strike_type": m.get("strike_type"),
         "yes_bid": to_float(m.get("yes_bid_dollars")),
         "yes_ask": to_float(m.get("yes_ask_dollars")),
@@ -279,7 +292,7 @@ def build_event_data(ev, markets):
     settled_bucket = None
     for m in markets:
         if (to_float(m.get("yes_bid_dollars")) or 0) >= 0.95:
-            settled_bucket = m.get("subtitle")
+            settled_bucket = m.get("subtitle") or synth_subtitle(m) or "?"
             break
     settled = settled_bucket is not None
 
@@ -379,6 +392,25 @@ DASHBOARD_HTML = r"""<!doctype html>
            border-radius: 4px; cursor: pointer; font: inherit; }
   button:disabled { opacity: 0.5; cursor: wait; }
   #err { color: #f85149; }
+  .tools { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1.25rem; }
+  .tool { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 0.9rem; }
+  .tool h3 { font-size: 0.95rem; margin: 0 0 0.6rem; color: #e6ebf5; }
+  .tool form { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: end; }
+  .tool label { display: flex; flex-direction: column; font-size: 0.75rem;
+                color: #8892a4; gap: 0.2rem; }
+  .tool label.wide { flex: 1 1 100%; }
+  .tool input, .tool select { background: #0f1115; color: #d8dde8;
+                              border: 1px solid #2a2e38; border-radius: 4px;
+                              padding: 0.3rem 0.4rem; font: inherit; min-width: 7rem; }
+  .tool input[type=text] { min-width: 14rem; }
+  .tool-out { margin-top: 0.75rem; font-size: 0.85rem; color: #c0c7d4; }
+  .tool-out table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  .tool-out th, .tool-out td { padding: 0.25rem 0.5rem; text-align: right;
+                                border-bottom: 1px solid #232730; font-size: 0.8rem; }
+  .tool-out th:first-child, .tool-out td:first-child { text-align: left; }
+  .kv { display: inline-block; margin-right: 1rem; }
+  .kv b { color: #e6ebf5; }
+  @media (max-width: 900px) { .tools { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -387,6 +419,44 @@ DASHBOARD_HTML = r"""<!doctype html>
   <button id="btn" onclick="refresh(true)">Refresh</button>
 </h1>
 <div id="err"></div>
+
+<div class="tools">
+  <div class="tool">
+    <h3>Predict by ticker</h3>
+    <form onsubmit="runPredict(event)">
+      <input id="p-ticker" type="text" placeholder="KXHIGHNY-26MAY13" required>
+      <button type="submit">Predict</button>
+    </form>
+    <div id="p-out" class="tool-out"></div>
+  </div>
+
+  <div class="tool">
+    <h3>Backtest</h3>
+    <form onsubmit="runBacktest(event)">
+      <label>Series
+        <select id="b-series">
+          <option value="">(use events list)</option>
+          <option>KXHIGHNY</option>
+          <option>KXHIGHCHI</option>
+          <option>KXHIGHMIA</option>
+          <option>KXHIGHLAX</option>
+          <option>KXHIGHDEN</option>
+          <option>KXHIGHAUS</option>
+          <option>KXHIGHPHIL</option>
+        </select>
+      </label>
+      <label>Days <input id="b-days" type="number" min="1" max="365" value="14"></label>
+      <label>Threshold <input id="b-threshold" type="number" min="0" max="1" step="0.05" value="0"></label>
+      <label>Lead (h) <input id="b-lead" type="number" min="1" max="168" step="0.5" value="24"></label>
+      <label class="wide">Events (overrides series)
+        <input id="b-events" type="text" placeholder="comma-separated tickers">
+      </label>
+      <button type="submit">Run backtest</button>
+    </form>
+    <div id="b-out" class="tool-out"></div>
+  </div>
+</div>
+
 <div id="root">Loading…</div>
 <script>
 const fmt    = v => v == null ? '—' : v.toFixed(1) + '°';
@@ -456,6 +526,109 @@ function render(data) {
 }
 
 refresh(false);
+
+async function runPredict(e) {
+  e.preventDefault();
+  const ticker = document.getElementById('p-ticker').value.trim().toUpperCase();
+  const out = document.getElementById('p-out');
+  out.textContent = 'Loading…';
+  try {
+    const r = await fetch('/api/predict?event=' + encodeURIComponent(ticker));
+    const data = await r.json();
+    if (!r.ok) { out.textContent = 'Error: ' + (data.error || r.status); return; }
+    renderPredict(data, out);
+  } catch (err) {
+    out.textContent = 'Error: ' + err.message;
+  }
+}
+
+function renderPredict(d, out) {
+  const f = d.forecasts || {}, m = d.model || {};
+  let html = `<div><b>${d.title}</b></div>`;
+  html += `<div class="kv">Resolves <b>${d.target_date}</b></div>`;
+  html += `<div class="kv">${d.station}</div>`;
+  html += `<div><span class="kv">ECMWF <b>${fmt(f.ecmwf)}</b></span>`;
+  html += `<span class="kv">GFS/HRRR <b>${fmt(f.gfs)}</b></span>`;
+  html += `<span class="kv">NWS <b>${fmt(f.nws)}</b></span>`;
+  html += `<span class="kv">METAR <b>${fmt(f.metar)}</b></span></div>`;
+  if (m.mu != null)
+    html += `<div class="kv">Model: μ <b>${m.mu.toFixed(1)}°</b> σ <b>${m.sigma.toFixed(1)}°</b></div>`;
+  if (d.settled) {
+    html += `<div class="dim">Settled bucket: <b>${d.settled_bucket}</b></div>`;
+    out.innerHTML = html; return;
+  }
+  const top = d.highest_probability;
+  if (top) {
+    html += `<div style="margin-top:0.5rem"><b>Highest probability:</b> ${top.subtitle} `
+         + `(${(top.prob*100).toFixed(1)}%)<br>`
+         + `&nbsp;YES @ ${money(top.yes_ask)}  → <span class="${cls(top.ev_yes)}">${signed(top.ev_yes)}</span>, `
+         + `NO @ ${money(top.no_ask)}  → <span class="${cls(top.ev_no)}">${signed(top.ev_no)}</span></div>`;
+  }
+  const by = d.best_ev_yes, bn = d.best_ev_no;
+  if (by && (!top || by.ticker !== top.ticker))
+    html += `<div>Best EV YES: ${by.subtitle} @ ${money(by.yes_ask)} → <span class="${cls(by.ev_yes)}">${signed(by.ev_yes)}</span> (P=${(by.prob*100).toFixed(1)}%)</div>`;
+  if (bn)
+    html += `<div>Best EV NO: ${bn.subtitle} @ ${money(bn.no_ask)} → <span class="${cls(bn.ev_no)}">${signed(bn.ev_no)}</span> (P_no=${((1-bn.prob)*100).toFixed(1)}%)</div>`;
+  out.innerHTML = html;
+}
+
+async function runBacktest(e) {
+  e.preventDefault();
+  const series = document.getElementById('b-series').value;
+  const events = document.getElementById('b-events').value.trim();
+  const days = document.getElementById('b-days').value;
+  const threshold = document.getElementById('b-threshold').value;
+  const lead = document.getElementById('b-lead').value;
+  const out = document.getElementById('b-out');
+  if (!series && !events) { out.textContent = 'Choose a series or list events.'; return; }
+  const btn = e.target.querySelector('button[type=submit]');
+  btn.disabled = true;
+  out.textContent = 'Running… (this can take 10–30s for 10+ events)';
+  const params = new URLSearchParams({days, threshold, lead_hours: lead});
+  if (series) params.set('series', series);
+  if (events) params.set('events', events);
+  try {
+    const r = await fetch('/api/backtest?' + params.toString());
+    const data = await r.json();
+    if (!r.ok) { out.textContent = 'Error: ' + (data.error || r.status); return; }
+    renderBacktest(data, out);
+  } catch (err) {
+    out.textContent = 'Error: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderBacktest(d, out) {
+  const s = d.summary || {};
+  let html = `<div><b>${s.bets || 0}</b> bets / ${d.params.n_events} events · `
+           + `<b>${s.wins || 0}</b> wins (${((s.win_rate||0)*100).toFixed(1)}%) · `
+           + `P/L <b class="${(s.total_pnl||0) >= 0 ? 'pos' : 'neg'}">$${(s.total_pnl||0).toFixed(3)}</b> · `
+           + `Max DD <b>$${(s.max_drawdown||0).toFixed(3)}</b> · `
+           + `avg $${(s.avg_pnl||0).toFixed(4)}</div>`;
+  if (s.skip_reasons && Object.keys(s.skip_reasons).length) {
+    html += `<div class="dim">Skipped: ` +
+      Object.entries(s.skip_reasons).map(([k,n]) => `${n}× ${k}`).join(' · ') + `</div>`;
+  }
+  html += `<table><thead><tr><th>Event</th><th>Pick</th><th>Winner</th><th>P</th>`
+        + `<th>Entry</th><th>P/L</th></tr></thead><tbody>`;
+  for (const r of d.results) {
+    if (r.skipped) {
+      html += `<tr><td>${r.event}</td><td colspan="5" class="dim">skipped: ${r.skipped}</td></tr>`;
+    } else {
+      const won = r.won;
+      html += `<tr><td>${r.event}</td>`
+            + `<td class="${won ? 'pos' : 'neg'}">${r.picked_bucket}</td>`
+            + `<td>${r.winner_bucket}</td>`
+            + `<td>${(r.model_prob*100).toFixed(1)}%</td>`
+            + `<td>$${r.entry_price.toFixed(2)}</td>`
+            + `<td class="${r.pnl >= 0 ? 'pos' : 'neg'}">${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(3)}</td>`
+            + `</tr>`;
+    }
+  }
+  html += `</tbody></table>`;
+  out.innerHTML = html;
+}
 </script>
 </body>
 </html>
@@ -467,18 +640,72 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[http] %s\n" % (fmt % args))
 
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/index"):
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        path, qs = parsed.path, parse_qs(parsed.query)
+
+        if path == "/" or path.startswith("/index"):
             self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode())
-        elif self.path.startswith("/api/markets"):
+            return
+
+        if path == "/api/markets":
             try:
-                data = get_dashboard_data(force="refresh=1" in self.path)
-                body = json.dumps(data).encode()
-                self._send(200, "application/json", body)
+                data = get_dashboard_data(force=qs.get("refresh", [""])[0] == "1")
+                self._send(200, "application/json", json.dumps(data).encode())
             except Exception as e:
                 self._send(500, "application/json",
                            json.dumps({"error": str(e)}).encode())
-        else:
-            self._send(404, "text/plain", b"not found")
+            return
+
+        if path == "/api/predict":
+            ticker = (qs.get("event", [""])[0] or "").strip().upper()
+            if not ticker:
+                self._send(400, "application/json",
+                           json.dumps({"error": "missing ?event=TICKER"}).encode())
+                return
+            try:
+                result = predict_event(ticker)
+                self._send(200, "application/json", json.dumps(result).encode())
+            except LookupError_ as e:
+                self._send(404, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            return
+
+        if path == "/api/backtest":
+            series = (qs.get("series", [""])[0] or "").strip().upper() or None
+            events = (qs.get("events", [""])[0] or "").strip() or None
+            try:
+                days = int(qs.get("days", ["30"])[0])
+                lead_hours = float(qs.get("lead_hours", ["24"])[0])
+                threshold = float(qs.get("threshold", ["0"])[0])
+            except ValueError as e:
+                self._send(400, "application/json",
+                           json.dumps({"error": f"bad number param: {e}"}).encode())
+                return
+            try:
+                tickers = resolve_backtest_tickers(events, series, days)
+                if not tickers:
+                    self._send(400, "application/json",
+                               json.dumps({"error": "no events resolved — provide series or events"}).encode())
+                    return
+                results, summary = run_backtest(tickers, lead_hours, threshold)
+                payload = {
+                    "params": {"series": series, "events": events, "days": days,
+                               "lead_hours": lead_hours, "threshold": threshold,
+                               "n_events": len(tickers)},
+                    "results": results,
+                    "summary": summary,
+                }
+                self._send(200, "application/json", json.dumps(payload).encode())
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            return
+
+        self._send(404, "text/plain", b"not found")
 
     def _send(self, code, ctype, body):
         self.send_response(code)
@@ -500,15 +727,18 @@ def cmd_serve(args):
 
 # ---------- predict ----------
 
+class LookupError_(Exception):
+    pass
+
+
 def fetch_event_and_markets(event_ticker):
-    """Look up one event + its markets by ticker."""
+    """Look up one event + its markets by ticker. Raises LookupError_ on failure."""
     series = event_ticker.split("-")[0]
     try:
         evs = kalshi_get("/events",
-                         {"series_ticker": series, "with_nested_markets": "true"}
-                         ).get("events", []) or []
+                         {"series_ticker": series}).get("events", []) or []
     except Exception as e:
-        sys.exit(f"failed to fetch series {series}: {e}")
+        raise LookupError_(f"failed to fetch series {series}: {e}")
     ev = next((e for e in evs if e["event_ticker"] == event_ticker), None)
     if ev is None:
         for status in ("settled", "closed"):
@@ -522,18 +752,46 @@ def fetch_event_and_markets(event_ticker):
             except Exception:
                 continue
     if ev is None:
-        sys.exit(f"event not found: {event_ticker}")
+        raise LookupError_(f"event not found: {event_ticker}")
     try:
         markets = kalshi_get("/markets",
                              {"event_ticker": event_ticker, "limit": 200}
                              ).get("markets", []) or []
     except Exception as e:
-        sys.exit(f"failed to fetch markets for {event_ticker}: {e}")
+        raise LookupError_(f"failed to fetch markets for {event_ticker}: {e}")
     return ev, markets
 
 
+def predict_event(event_ticker):
+    """Return a JSON-serializable prediction summary for an event ticker."""
+    ev, markets = fetch_event_and_markets(event_ticker)
+    data = build_event_data(ev, markets)
+    if data is None:
+        raise LookupError_(f"unsupported series: {ev['series_ticker']}")
+    probs = [m for m in data["markets"] if m.get("prob") is not None]
+    return {
+        "event_ticker": data["event_ticker"],
+        "title": data["title"],
+        "target_date": data["target_date"],
+        "station": data["station"],
+        "forecasts": data["forecasts"],
+        "model": data["model"],
+        "settled": data["settled"],
+        "settled_bucket": data["settled_bucket"],
+        "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
+        "best_ev_yes": max((m for m in data["markets"] if m.get("ev_yes") is not None),
+                           key=lambda m: m["ev_yes"], default=None),
+        "best_ev_no":  max((m for m in data["markets"] if m.get("ev_no")  is not None),
+                           key=lambda m: m["ev_no"],  default=None),
+        "markets": data["markets"],
+    }
+
+
 def cmd_predict(args):
-    ev, markets = fetch_event_and_markets(args.event_ticker)
+    try:
+        ev, markets = fetch_event_and_markets(args.event_ticker)
+    except LookupError_ as e:
+        sys.exit(str(e))
     data = build_event_data(ev, markets)
     if data is None:
         sys.exit(f"unsupported series: {ev['series_ticker']}")
@@ -621,10 +879,19 @@ def list_events_for_series(series, days, status_options=("settled",)):
                 print(f"[kalshi] events {series} {status}: {e}", file=sys.stderr)
                 break
             for ev in resp.get("events", []) or []:
-                try:
-                    strike = datetime.fromisoformat(ev["strike_date"].replace("Z", "+00:00"))
-                except Exception:
-                    continue
+                strike = None
+                if ev.get("strike_date"):
+                    try:
+                        strike = datetime.fromisoformat(ev["strike_date"].replace("Z", "+00:00"))
+                    except Exception:
+                        strike = None
+                if strike is None:
+                    # some series omit strike_date — fall back to event ticker date
+                    try:
+                        d = datetime.strptime(event_local_date(ev), "%Y-%m-%d")
+                        strike = d.replace(tzinfo=timezone.utc) + timedelta(days=1)
+                    except Exception:
+                        continue
                 if strike >= cutoff:
                     out.append(ev)
             cursor = resp.get("cursor")
@@ -632,7 +899,7 @@ def list_events_for_series(series, days, status_options=("settled",)):
                 break
     # dedupe by event_ticker, keep oldest -> newest
     seen, unique = set(), []
-    for ev in sorted(out, key=lambda e: e["strike_date"]):
+    for ev in sorted(out, key=lambda e: e.get("strike_date") or event_local_date(e)):
         if ev["event_ticker"] not in seen:
             seen.add(ev["event_ticker"])
             unique.append(ev)
@@ -703,9 +970,9 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     return {
         "event": event_ticker,
         "target_date": target_date,
-        "winner_bucket": winner.get("subtitle"),
+        "winner_bucket": winner.get("subtitle") or synth_subtitle(winner) or "?",
         "picked_ticker": pick["ticker"],
-        "picked_bucket": pick.get("subtitle"),
+        "picked_bucket": pick.get("subtitle") or synth_subtitle(pick) or "?",
         "model_prob": pick_p,
         "ecmwf": ecmwf, "gfs": gfs,
         "mu": mu, "sigma": sigma,
@@ -715,37 +982,57 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     }
 
 
-def cmd_backtest(args):
-    if args.events:
-        tickers = [t.strip() for t in args.events.split(",") if t.strip()]
-    elif args.series:
-        evs = list_events_for_series(args.series, args.days)
-        tickers = [e["event_ticker"] for e in evs]
-    else:
-        sys.exit("backtest requires --events OR --series")
+def run_backtest(tickers, lead_hours, threshold, *, on_progress=None):
+    """Core backtest loop. on_progress(i, n, result) callback after each event."""
+    results = []
+    for i, t in enumerate(tickers, 1):
+        r = backtest_one_event(t, lead_hours, threshold)
+        results.append(r)
+        if on_progress is not None:
+            on_progress(i, len(tickers), r)
+    bets = [r for r in results if "skipped" not in r]
+    summary = _backtest_summary(bets)
+    skip_reasons = {}
+    for r in results:
+        if "skipped" in r:
+            key = r["skipped"].split("(")[0]
+            skip_reasons[key] = skip_reasons.get(key, 0) + 1
+    summary["skip_reasons"] = skip_reasons
+    return results, summary
 
+
+def resolve_backtest_tickers(events_str=None, series=None, days=30):
+    if events_str:
+        return [t.strip() for t in events_str.split(",") if t.strip()]
+    if series:
+        return [e["event_ticker"] for e in list_events_for_series(series, days)]
+    return []
+
+
+def cmd_backtest(args):
+    tickers = resolve_backtest_tickers(args.events, args.series, args.days)
+    if not tickers and not (args.events or args.series):
+        sys.exit("backtest requires --events OR --series")
     if not tickers:
         sys.exit("no events to backtest")
 
     print(f"Backtesting {len(tickers)} event(s) at T-{args.lead_hours}h "
           f"(threshold={args.threshold:.2f})", file=sys.stderr)
 
-    results = []
-    for i, t in enumerate(tickers, 1):
-        r = backtest_one_event(t, args.lead_hours, args.threshold)
-        results.append(r)
-        if not args.json:
-            if "skipped" in r:
-                print(f"  [{i}/{len(tickers)}] {t}  SKIPPED ({r['skipped']})")
-            else:
-                tag = "WIN " if r["won"] else "LOSS"
-                print(f"  [{i}/{len(tickers)}] {t}  {tag}  "
-                      f"pick={r['picked_bucket']:<14} winner={r['winner_bucket']:<14} "
-                      f"P={r['model_prob']*100:5.1f}%  entry=${r['entry_price']:.2f}  "
-                      f"pnl={r['pnl']:+.3f}")
+    def report(i, n, r):
+        if args.json:
+            return
+        if "skipped" in r:
+            print(f"  [{i}/{n}] {r['event']}  SKIPPED ({r['skipped']})")
+        else:
+            tag = "WIN " if r["won"] else "LOSS"
+            print(f"  [{i}/{n}] {r['event']}  {tag}  "
+                  f"pick={r['picked_bucket']:<14} winner={r['winner_bucket']:<14} "
+                  f"P={r['model_prob']*100:5.1f}%  entry=${r['entry_price']:.2f}  "
+                  f"pnl={r['pnl']:+.3f}")
 
-    bets = [r for r in results if "skipped" not in r]
-    summary = _backtest_summary(bets)
+    results, summary = run_backtest(tickers, args.lead_hours, args.threshold,
+                                    on_progress=report)
 
     if args.json:
         print(json.dumps({"results": results, "summary": summary}, indent=2))
