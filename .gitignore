@@ -5,6 +5,10 @@ __pycache__/
 
 # Machine-generated analysis outputs
 *.out
+balanced_result.json
+balanced_v3.json
+balanced_dual.json
+nws_log.jsonl
 
 # C extensions
 *.so

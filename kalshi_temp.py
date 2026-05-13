@@ -45,18 +45,20 @@ METAR_URL = "https://aviationweather.gov/api/data/metar"
 USER_AGENT = "kalshi-temp/0.1 (weatherbot fork)"
 BASE_SIGMA = 2.0  # °F floor on forecast uncertainty
 CACHE_TTL = 300   # seconds
+NWS_LOG_PATH = "nws_log.jsonl"  # forward log for future NWS bias audit
 
-# Per-city mean error of (ECMWF+GFS)/2 vs Kalshi-reported winning bucket midpoint,
-# measured over 60 days of settled events. bias = forecast - actual.
-# To debias, compute mu_corrected = mu_raw - BIAS[series].
+# Per-city mean error of weighted_mean(ECMWF, GFS) vs Kalshi winning bucket
+# midpoint, measured over 60 days of settled events. bias = forecast - actual.
+# Re-fitted with the same per-city weights used in the live/backtest model
+# (see SOURCE_WEIGHTS below). To debias: mu_corrected = mu_raw - BIAS[series].
 BIAS = {
-    "KXHIGHNY":   -0.53,
-    "KXHIGHCHI":  -1.16,
-    "KXHIGHMIA":  -2.07,
-    "KXHIGHLAX":  +2.44,
-    "KXHIGHDEN":  -0.81,
-    "KXHIGHAUS":  -2.08,
-    "KXHIGHPHIL": -1.43,
+    "KXHIGHNY":   -0.44,   # n=60, sd=1.44
+    "KXHIGHCHI":  -1.04,   # n=60, sd=1.73
+    "KXHIGHMIA":  -1.52,   # n=59, sd=1.23
+    "KXHIGHLAX":  -0.55,   # n=60, sd=1.63
+    "KXHIGHDEN":  -0.81,   # n=60, sd=2.06
+    "KXHIGHAUS":  -1.81,   # n=60, sd=1.40
+    "KXHIGHPHIL": -1.22,   # n=60, sd=1.38
 }
 
 # Per-city source weights (ECMWF, GFS). GFS is less biased everywhere so given
@@ -70,6 +72,22 @@ SOURCE_WEIGHTS = {
     "KXHIGHAUS":  {"ecmwf_ifs025": 0.30, "gfs_seamless": 0.70},
     "KXHIGHPHIL": {"ecmwf_ifs025": 0.35, "gfs_seamless": 0.65},
 }
+
+# Per-city recommended decision lead time (hours before close_time), derived
+# from a resolution-timeline study: median time when each market's winning
+# bucket first crossed yes_bid >= 0.85 (i.e. the market "knew"), plus a 3-hour
+# safety buffer so we enter before consensus forms. Use as a smarter default
+# when the caller doesn't pass an explicit --lead-hours.
+EVENT_LEAD_HOURS = {
+    "KXHIGHNY":   12.0,   # median resolves T-9.0h  (~4 PM local)
+    "KXHIGHCHI":  12.0,   # median resolves T-9.0h  (~4 PM local)
+    "KXHIGHMIA":  13.0,   # median resolves T-10.0h (~3 PM local)
+    "KXHIGHLAX":  14.5,   # median resolves T-11.5h (~2 PM local) — enters earlier
+    "KXHIGHDEN":  12.0,   # median resolves T-9.0h  (~4 PM local)
+    "KXHIGHAUS":  11.0,   # median resolves T-8.0h  (~5 PM local) — enters later
+    "KXHIGHPHIL": 12.0,   # median resolves T-9.0h  (~4 PM local)
+}
+DEFAULT_LEAD_HOURS = 12.0  # used when EVENT_LEAD_HOURS has no entry for series
 
 
 def weighted_mean(series, ecmwf, gfs):
@@ -404,8 +422,10 @@ def build_event_data(ev, markets):
         mu_raw = weighted_mean(series, ecmwf, gfs)
         if mu_raw is None:
             mu_raw = sum(sources) / len(sources)
-        if nws is not None:
-            mu_raw = 0.7 * mu_raw + 0.3 * nws
+        # NWS is fetched and displayed for reference + future audit, but is NOT
+        # blended into the model. The BIAS table was fit on ECMWF+GFS weighted_mean
+        # only, so adding NWS here would create a known statistical inconsistency.
+        # See forward NWS logging (nws_log.jsonl) for future weight calibration.
         bias = BIAS.get(series, 0.0)
         mu = mu_raw - bias
         spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
@@ -629,7 +649,7 @@ function render(data) {
     html += `<div class="summary">`;
     html += `<span>Resolves: <b>${ev.target_date}</b></span>`;
     html += `<span>Station: <b>${ev.station}</b></span>`;
-    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · NWS <b>${fmt(f.nws)}</b> · METAR <b>${fmt(f.metar)}</b>`;
+    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · METAR <b>${fmt(f.metar)}</b>`;
     if (f.today_max != null) html += ` · TODAY-MAX <b>${fmt(f.today_max)}</b>`;
     html += `</span>`;
     if (m.mu != null) {
@@ -684,7 +704,6 @@ function renderPredict(d, out) {
   html += `<div class="kv">${d.station}</div>`;
   html += `<div><span class="kv">ECMWF <b>${fmt(f.ecmwf)}</b></span>`;
   html += `<span class="kv">GFS/HRRR <b>${fmt(f.gfs)}</b></span>`;
-  html += `<span class="kv">NWS <b>${fmt(f.nws)}</b></span>`;
   html += `<span class="kv">METAR <b>${fmt(f.metar)}</b></span>`;
   if (f.today_max != null) html += `<span class="kv">TODAY-MAX <b>${fmt(f.today_max)}</b></span>`;
   html += `</div>`;
@@ -947,12 +966,35 @@ def _sanity_keep_no(market):
     return True
 
 
+def _log_nws_snapshot(data):
+    """Append one JSONL row capturing forecasts at decision time for future NWS audit."""
+    try:
+        f = data["forecasts"]
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event_ticker": data["event_ticker"],
+            "target_date": data["target_date"],
+            "station": data["station"],
+            "ecmwf": f.get("ecmwf"),
+            "gfs": f.get("gfs"),
+            "nws": f.get("nws"),
+            "metar": f.get("metar"),
+            "today_max": f.get("today_max"),
+            "model_mu": (data.get("model") or {}).get("mu"),
+        }
+        with open(NWS_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception as e:
+        print(f"[nws-log] {e}", file=sys.stderr)
+
+
 def predict_event(event_ticker):
     """Return a JSON-serializable prediction summary for an event ticker."""
     ev, markets = fetch_event_and_markets(event_ticker)
     data = build_event_data(ev, markets)
     if data is None:
         raise LookupError_(f"unsupported series: {ev['series_ticker']}")
+    _log_nws_snapshot(data)
     probs = [m for m in data["markets"] if m.get("prob") is not None]
     return {
         "event_ticker": data["event_ticker"],
@@ -1010,7 +1052,7 @@ def cmd_predict(args):
     print(f"Event:    {data['title']}")
     print(f"Resolves: {data['target_date']} at {data['station']}")
     print(f"Forecasts (°F): ECMWF {_fmtf(f['ecmwf'])}  GFS/HRRR {_fmtf(f['gfs'])}  "
-          f"NWS {_fmtf(f['nws'])}  METAR {_fmtf(f['metar'])}")
+          f"METAR {_fmtf(f['metar'])}")
     m = data["model"]
     if m.get("mu") is not None:
         print(f"Model: mu={m['mu']:.2f}°F  sigma={m['sigma']:.2f}°F  sources={m.get('sources')}")
@@ -1098,11 +1140,15 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     """Run both YES (highest model-prob bucket) and NO (best-EV-NO with sanity cap)
     strategies on a single settled event. Returns one dict with 'yes' and 'no'
     sub-outcomes, or {'skipped': reason} if the event is unusable.
+
+    lead_hours <= 0 means "use the per-city EVENT_LEAD_HOURS default".
     """
     series = event_ticker.split("-")[0]
     city = CITIES.get(series)
     if not city:
         return {"event": event_ticker, "skipped": "unsupported_series"}
+    if lead_hours <= 0:
+        lead_hours = EVENT_LEAD_HOURS.get(series, DEFAULT_LEAD_HOURS)
     try:
         markets = kalshi_get("/markets", {"event_ticker": event_ticker, "limit": 200}
                              ).get("markets", []) or []
@@ -1386,8 +1432,9 @@ def main():
     bt.add_argument("--series", help="series ticker, e.g. KXHIGHNY")
     bt.add_argument("--days", type=int, default=30, help="lookback window in days (default 30)")
     bt.add_argument("--events", help="comma-separated event tickers (overrides --series)")
-    bt.add_argument("--lead-hours", dest="lead_hours", type=float, default=24.0,
-                    help="hours before market close to use as entry time (default 24)")
+    bt.add_argument("--lead-hours", dest="lead_hours", type=float, default=0.0,
+                    help="hours before market close to use as entry time; "
+                         "0 = auto (use per-city EVENT_LEAD_HOURS)")
     bt.add_argument("--threshold", type=float, default=0.0,
                     help="min model probability required to place a bet (default 0)")
     bt.add_argument("--json", action="store_true", help="emit JSON instead of text")

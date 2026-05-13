@@ -62,8 +62,10 @@ def fetch_event(event_ticker):
         ecmwf, gfs = f_ec.result(), f_gfs.result()
     if ecmwf is None or gfs is None:
         return None
+    # Match the live model: weighted ECMWF+GFS per city (not simple average).
+    mu_weighted = kt.weighted_mean(series, ecmwf, gfs)
     return {"event": event_ticker, "actual": actual,
-            "ecmwf": ecmwf, "gfs": gfs, "mu": (ecmwf + gfs) / 2.0}
+            "ecmwf": ecmwf, "gfs": gfs, "mu": mu_weighted}
 
 
 def summarize(label, rows):
