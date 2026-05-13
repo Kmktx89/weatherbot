@@ -679,9 +679,14 @@ function renderPredict(d, out) {
   html += `<div><span class="kv">ECMWF <b>${fmt(f.ecmwf)}</b></span>`;
   html += `<span class="kv">GFS/HRRR <b>${fmt(f.gfs)}</b></span>`;
   html += `<span class="kv">NWS <b>${fmt(f.nws)}</b></span>`;
-  html += `<span class="kv">METAR <b>${fmt(f.metar)}</b></span></div>`;
-  if (m.mu != null)
-    html += `<div class="kv">Model: μ <b>${m.mu.toFixed(1)}°</b> σ <b>${m.sigma.toFixed(1)}°</b></div>`;
+  html += `<span class="kv">METAR <b>${fmt(f.metar)}</b></span>`;
+  if (f.today_max != null) html += `<span class="kv">TODAY-MAX <b>${fmt(f.today_max)}</b></span>`;
+  html += `</div>`;
+  if (m.mu != null) {
+    let mod = `<div class="kv">Model: μ <b>${m.mu.toFixed(1)}°</b> σ <b>${m.sigma.toFixed(1)}°</b>`;
+    if (m.truncation != null) mod += ` <span class="dim">(truncated ≥ ${m.truncation.toFixed(1)}°)</span>`;
+    html += mod + `</div>`;
+  }
   if (d.settled) {
     html += `<div class="dim">Settled bucket: <b>${d.settled_bucket}</b></div>`;
     out.innerHTML = html; return;
@@ -900,6 +905,7 @@ def fetch_event_and_markets(event_ticker):
 
 SANITY_MARKET_CONFIDENT_YES = 0.85   # if yes_ask >= this, market is highly confident YES
 SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly disagrees
+MIN_BEST_EV                 = 0.05   # hide 'best' suggestions whose edge is below 5¢
 
 
 def _sanity_keep_no(market):
@@ -936,10 +942,12 @@ def predict_event(event_ticker):
         "settled": data["settled"],
         "settled_bucket": data["settled_bucket"],
         "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
-        "best_ev_yes": max((m for m in data["markets"] if m.get("ev_yes") is not None),
+        "best_ev_yes": max((m for m in data["markets"]
+                            if m.get("ev_yes") is not None and m["ev_yes"] >= MIN_BEST_EV),
                            key=lambda m: m["ev_yes"], default=None),
         "best_ev_no":  max((m for m in data["markets"]
-                            if m.get("ev_no") is not None and _sanity_keep_no(m)),
+                            if m.get("ev_no") is not None and m["ev_no"] >= MIN_BEST_EV
+                            and _sanity_keep_no(m)),
                            key=lambda m: m["ev_no"],  default=None),
         "markets": data["markets"],
     }
