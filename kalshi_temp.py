@@ -258,20 +258,68 @@ def fetch_metar_temp(icao):
     return None
 
 
+def fetch_metar_today_max(icao, hours=10):
+    """Max temperature (°F) observed at icao in the last `hours` hours."""
+    try:
+        r = session.get(METAR_URL,
+                        params={"ids": icao, "format": "json", "hoursBeforeNow": hours},
+                        timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        temps = [float(o["temp"]) * 9 / 5 + 32
+                 for o in (data or []) if o.get("temp") is not None]
+        return max(temps) if temps else None
+    except Exception as e:
+        print(f"[metar-window:{icao}] {e}", file=sys.stderr)
+        return None
+
+
+def _local_now(tz_name):
+    """Datetime in the city's local tz (uses stdlib zoneinfo)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
 # ---------- model ----------
 
-def bucket_probability(market, mu, sigma):
-    """Probability the integer daily-high lands in this bucket (continuity-corrected)."""
+def bucket_bounds(market):
+    """Continuous bounds for a bucket; lower/upper may be ±inf."""
     st = market.get("strike_type")
     cap = market.get("cap_strike")
     floor = market.get("floor_strike")
     if st == "less" and cap is not None:
-        return normal_cdf(cap - 0.5, mu, sigma)
+        return float("-inf"), cap - 0.5
     if st == "greater" and floor is not None:
-        return 1.0 - normal_cdf(floor + 0.5, mu, sigma)
+        return floor + 0.5, float("inf")
     if st == "between" and floor is not None and cap is not None:
-        return normal_cdf(cap + 0.5, mu, sigma) - normal_cdf(floor - 0.5, mu, sigma)
+        return floor - 0.5, cap + 0.5
     return None
+
+
+def bucket_probability(market, mu, sigma, *, lower_truncation=None):
+    """Probability the daily high lands in this bucket.
+
+    If lower_truncation is provided (e.g. afternoon METAR max), returns the
+    conditional probability P(bucket | high >= lower_truncation), zeroing
+    impossible buckets and re-normalizing across the remaining tail.
+    """
+    bounds = bucket_bounds(market)
+    if bounds is None:
+        return None
+    lower, upper = bounds
+    if lower_truncation is None:
+        return normal_cdf(upper, mu, sigma) - normal_cdf(lower, mu, sigma)
+    if upper <= lower_truncation:
+        return 0.0
+    denom = 1.0 - normal_cdf(lower_truncation, mu, sigma)
+    if denom <= 0:
+        return 1.0 if lower_truncation < upper else 0.0
+    eff_lower = max(lower, lower_truncation)
+    raw = normal_cdf(upper, mu, sigma) - normal_cdf(eff_lower, mu, sigma)
+    return max(0.0, raw / denom)
 
 
 def _sort_key(m):
@@ -317,14 +365,23 @@ def build_event_data(ev, markets):
         return None
     target = event_local_date(ev)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    now_local = _local_now(city["tz"])
+    today_local = now_local.date().isoformat()
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
         f_ec  = pool.submit(fetch_open_meteo, city["lat"], city["lon"], target, "ecmwf_ifs025")
         f_gfs = pool.submit(fetch_open_meteo, city["lat"], city["lon"], target, "gfs_seamless")
         f_nws = pool.submit(fetch_nws_high, city["lat"], city["lon"], target)
         f_met = pool.submit(fetch_metar_temp, city["icao"])
+        if target == today_local and now_local.hour >= 12:
+            f_today = pool.submit(fetch_metar_today_max, city["icao"], 10)
+        else:
+            f_today = None
         ecmwf, gfs, nws, metar = f_ec.result(), f_gfs.result(), f_nws.result(), f_met.result()
+        today_max = f_today.result() if f_today else None
 
-    forecasts = {"ecmwf": ecmwf, "gfs": gfs, "nws": nws, "metar": metar}
+    forecasts = {"ecmwf": ecmwf, "gfs": gfs, "nws": nws, "metar": metar,
+                 "today_max": today_max}
     sources = [v for v in (ecmwf, gfs, nws) if v is not None]
 
     settled_bucket = None
@@ -347,11 +404,20 @@ def build_event_data(ev, markets):
         mu = mu_raw - bias
         spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
         sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
+
+        truncation = None
+        if today_max is not None:
+            truncation = today_max - 0.5  # METAR readings round; give 0.5°F headroom
+            if truncation > mu:
+                mu = truncation + 0.3  # forecast can't be cooler than observed peak
+
         model = {"mu": mu, "mu_raw": mu_raw, "bias": bias,
-                 "sigma": sigma, "sources": len(sources)}
+                 "sigma": sigma, "sources": len(sources),
+                 "today_max": today_max, "truncation": truncation}
+
         out_markets = []
         for m in markets:
-            prob = bucket_probability(m, mu, sigma)
+            prob = bucket_probability(m, mu, sigma, lower_truncation=truncation)
             ya, na = to_float(m.get("yes_ask_dollars")), to_float(m.get("no_ask_dollars"))
             ev_yes = (prob - ya) if (prob is not None and ya not in (None, 0.0)) else None
             ev_no = ((1 - prob) - na) if (prob is not None and na not in (None, 0.0)) else None
@@ -557,9 +623,14 @@ function render(data) {
     html += `<div class="summary">`;
     html += `<span>Resolves: <b>${ev.target_date}</b></span>`;
     html += `<span>Station: <b>${ev.station}</b></span>`;
-    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · NWS <b>${fmt(f.nws)}</b> · METAR <b>${fmt(f.metar)}</b></span>`;
-    if (m.mu != null)
-      html += `<span>Model: <b>μ ${m.mu.toFixed(1)}° · σ ${m.sigma.toFixed(1)}°</b></span>`;
+    html += `<span>ECMWF <b>${fmt(f.ecmwf)}</b> · GFS/HRRR <b>${fmt(f.gfs)}</b> · NWS <b>${fmt(f.nws)}</b> · METAR <b>${fmt(f.metar)}</b>`;
+    if (f.today_max != null) html += ` · TODAY-MAX <b>${fmt(f.today_max)}</b>`;
+    html += `</span>`;
+    if (m.mu != null) {
+      let mod = `<span>Model: <b>μ ${m.mu.toFixed(1)}° · σ ${m.sigma.toFixed(1)}°</b>`;
+      if (m.truncation != null) mod += ` <span class="dim">(truncated ≥ ${m.truncation.toFixed(1)}°)</span>`;
+      html += mod + `</span>`;
+    }
     html += `</div>`;
     html += `<table><thead><tr>
       <th>Bucket</th><th>Model P</th><th>YES bid</th><th>YES ask</th>
@@ -827,6 +898,27 @@ def fetch_event_and_markets(event_ticker):
     return ev, markets
 
 
+SANITY_MARKET_CONFIDENT_YES = 0.85   # if yes_ask >= this, market is highly confident YES
+SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly disagrees
+
+
+def _sanity_keep_no(market):
+    """Suppress 'Best EV NO' suggestions when betting against a highly confident market.
+
+    Real-world signal: when a market is at >= $0.85 YES hours before close, the
+    market usually has near-term observations (afternoon METAR, observed peak)
+    that a static forecast model can't see. Our model thinking 'NO is +50¢ EV'
+    is almost always wrong in that regime. Skip those bets.
+    """
+    yes_ask = market.get("yes_ask")
+    prob = market.get("prob")
+    if yes_ask is None or prob is None:
+        return True
+    if yes_ask >= SANITY_MARKET_CONFIDENT_YES and prob <= SANITY_MODEL_LOW_PROB:
+        return False
+    return True
+
+
 def predict_event(event_ticker):
     """Return a JSON-serializable prediction summary for an event ticker."""
     ev, markets = fetch_event_and_markets(event_ticker)
@@ -846,7 +938,8 @@ def predict_event(event_ticker):
         "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
         "best_ev_yes": max((m for m in data["markets"] if m.get("ev_yes") is not None),
                            key=lambda m: m["ev_yes"], default=None),
-        "best_ev_no":  max((m for m in data["markets"] if m.get("ev_no")  is not None),
+        "best_ev_no":  max((m for m in data["markets"]
+                            if m.get("ev_no") is not None and _sanity_keep_no(m)),
                            key=lambda m: m["ev_no"],  default=None),
         "markets": data["markets"],
     }
