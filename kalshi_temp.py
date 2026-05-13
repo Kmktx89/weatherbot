@@ -46,6 +46,44 @@ USER_AGENT = "kalshi-temp/0.1 (weatherbot fork)"
 BASE_SIGMA = 2.0  # °F floor on forecast uncertainty
 CACHE_TTL = 300   # seconds
 
+# Per-city mean error of (ECMWF+GFS)/2 vs Kalshi-reported winning bucket midpoint,
+# measured over 60 days of settled events. bias = forecast - actual.
+# To debias, compute mu_corrected = mu_raw - BIAS[series].
+BIAS = {
+    "KXHIGHNY":   -0.53,
+    "KXHIGHCHI":  -1.16,
+    "KXHIGHMIA":  -2.07,
+    "KXHIGHLAX":  +2.44,
+    "KXHIGHDEN":  -0.81,
+    "KXHIGHAUS":  -2.08,
+    "KXHIGHPHIL": -1.43,
+}
+
+# Per-city source weights (ECMWF, GFS). GFS is less biased everywhere so given
+# higher weight. LAX ECMWF is +6°F off — effectively suppressed.
+SOURCE_WEIGHTS = {
+    "KXHIGHNY":   {"ecmwf_ifs025": 0.40, "gfs_seamless": 0.60},
+    "KXHIGHCHI":  {"ecmwf_ifs025": 0.40, "gfs_seamless": 0.60},
+    "KXHIGHMIA":  {"ecmwf_ifs025": 0.25, "gfs_seamless": 0.75},
+    "KXHIGHLAX":  {"ecmwf_ifs025": 0.10, "gfs_seamless": 0.90},
+    "KXHIGHDEN":  {"ecmwf_ifs025": 0.50, "gfs_seamless": 0.50},
+    "KXHIGHAUS":  {"ecmwf_ifs025": 0.30, "gfs_seamless": 0.70},
+    "KXHIGHPHIL": {"ecmwf_ifs025": 0.35, "gfs_seamless": 0.65},
+}
+
+
+def weighted_mean(series, ecmwf, gfs):
+    """Combine forecasts using per-city weights. Falls back gracefully on missing sources."""
+    w = SOURCE_WEIGHTS.get(series, {"ecmwf_ifs025": 0.5, "gfs_seamless": 0.5})
+    parts, total_w = [], 0.0
+    if ecmwf is not None:
+        parts.append(ecmwf * w["ecmwf_ifs025"]); total_w += w["ecmwf_ifs025"]
+    if gfs is not None:
+        parts.append(gfs * w["gfs_seamless"]); total_w += w["gfs_seamless"]
+    if total_w == 0:
+        return None
+    return sum(parts) / total_w
+
 session = requests.Session()
 session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
 
@@ -300,10 +338,17 @@ def build_event_data(ev, markets):
         model = {"mu": None, "sigma": None}
         out_markets = [dict(_market_summary(m), prob=None, ev_yes=None, ev_no=None) for m in markets]
     else:
-        mu = sum(sources) / len(sources)
+        mu_raw = weighted_mean(series, ecmwf, gfs)
+        if mu_raw is None:
+            mu_raw = sum(sources) / len(sources)
+        if nws is not None:
+            mu_raw = 0.7 * mu_raw + 0.3 * nws
+        bias = BIAS.get(series, 0.0)
+        mu = mu_raw - bias
         spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
         sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
-        model = {"mu": mu, "sigma": sigma, "sources": len(sources)}
+        model = {"mu": mu, "mu_raw": mu_raw, "bias": bias,
+                 "sigma": sigma, "sources": len(sources)}
         out_markets = []
         for m in markets:
             prob = bucket_probability(m, mu, sigma)
@@ -394,7 +439,12 @@ DASHBOARD_HTML = r"""<!doctype html>
   #err { color: #f85149; }
   .tools { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1.25rem; }
   .tool { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 0.9rem; }
-  .tool h3 { font-size: 0.95rem; margin: 0 0 0.6rem; color: #e6ebf5; }
+  .tool h3 { font-size: 0.95rem; margin: 0 0 0.6rem; color: #e6ebf5;
+             display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+  .presets { font-size: 0.75rem; color: #8892a4; font-weight: normal; }
+  .preset { background: #2a2e38; padding: 0.2rem 0.55rem; margin-left: 0.3rem;
+            font-size: 0.75rem; border-radius: 3px; }
+  .preset:hover { background: #364050; }
   .tool form { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: end; }
   .tool label { display: flex; flex-direction: column; font-size: 0.75rem;
                 color: #8892a4; gap: 0.2rem; }
@@ -431,11 +481,19 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 
   <div class="tool">
-    <h3>Backtest</h3>
+    <h3>Backtest
+      <span class="presets">
+        Preset:
+        <button type="button" class="preset" onclick="setPreset(0.70,12,60)" title="84% WR · 31 bets / 60d · +$2.48 · max DD $1.37">Conservative</button>
+        <button type="button" class="preset" onclick="setPreset(0.50,12,60)" title="79% WR · 62 bets / 60d · +$11.71 · max DD $1.37 (BEST risk-adjusted)">Balanced</button>
+        <button type="button" class="preset" onclick="setPreset(0.30,12,60)" title="62% WR · 318 bets / 60d · +$37.59 · max DD $5.44 (highest PnL)">Aggressive</button>
+        <button type="button" class="preset" onclick="setPreset(0,24,14)" title="No filter, default settings">Default</button>
+      </span>
+    </h3>
     <form onsubmit="runBacktest(event)">
       <label>Series
         <select id="b-series">
-          <option value="">(use events list)</option>
+          <option value="">(all series)</option>
           <option>KXHIGHNY</option>
           <option>KXHIGHCHI</option>
           <option>KXHIGHMIA</option>
@@ -572,6 +630,12 @@ function renderPredict(d, out) {
   out.innerHTML = html;
 }
 
+function setPreset(threshold, lead, days) {
+  document.getElementById('b-threshold').value = threshold;
+  document.getElementById('b-lead').value = lead;
+  document.getElementById('b-days').value = days;
+}
+
 async function runBacktest(e) {
   e.preventDefault();
   const series = document.getElementById('b-series').value;
@@ -686,7 +750,8 @@ class Handler(BaseHTTPRequestHandler):
                            json.dumps({"error": f"bad number param: {e}"}).encode())
                 return
             try:
-                tickers = resolve_backtest_tickers(events, series, days)
+                tickers = resolve_backtest_tickers(events, series, days,
+                                                   all_series=(not series and not events))
                 if not tickers:
                     self._send(400, "application/json",
                                json.dumps({"error": "no events resolved — provide series or events"}).encode())
@@ -938,7 +1003,10 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     if not sources:
         return {"event": event_ticker, "skipped": "no_historical_forecast"}
 
-    mu = sum(sources) / len(sources)
+    mu_raw = weighted_mean(series, ecmwf, gfs)
+    if mu_raw is None:
+        mu_raw = sum(sources) / len(sources)
+    mu = mu_raw - BIAS.get(series, 0.0)
     spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
     sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
 
@@ -1001,11 +1069,19 @@ def run_backtest(tickers, lead_hours, threshold, *, on_progress=None):
     return results, summary
 
 
-def resolve_backtest_tickers(events_str=None, series=None, days=30):
+def resolve_backtest_tickers(events_str=None, series=None, days=30, *, all_series=False):
     if events_str:
         return [t.strip() for t in events_str.split(",") if t.strip()]
     if series:
         return [e["event_ticker"] for e in list_events_for_series(series, days)]
+    if all_series:
+        tickers = []
+        for s in CITIES:
+            try:
+                tickers.extend(e["event_ticker"] for e in list_events_for_series(s, days))
+            except Exception as e:
+                print(f"[backtest] {s}: {e}", file=sys.stderr)
+        return tickers
     return []
 
 
