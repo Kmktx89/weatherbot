@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""kalshi_temp.py — Kalshi daily-high-temperature dashboard.
+"""kalshi_temp.py — Kalshi daily-high-temperature dashboard, predictor, backtester.
 
 Usage:
-    python kalshi_temp.py serve --port 8765
+    python kalshi_temp.py serve   --port 8765
+    python kalshi_temp.py predict KXHIGHNY-26MAY13
+    python kalshi_temp.py backtest --series KXHIGHNY --days 30
+    python kalshi_temp.py backtest --events KXHIGHNY-26MAY10,KXHIGHNY-26MAY11
 
-Fetches Kalshi temperature markets, forecasts from Open-Meteo (ECMWF + GFS),
-NWS, and current METAR observations. Renders a local HTML dashboard at
-http://localhost:<port>/ that shows model probability + EV per bucket.
+Fetches Kalshi temperature markets and forecasts from Open-Meteo (ECMWF + GFS),
+NWS, and current METAR observations.
 """
 
 import argparse
@@ -36,6 +38,7 @@ CITIES = {
 
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
 OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_HIST = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 NWS = "https://api.weather.gov"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 
@@ -132,9 +135,16 @@ def fetch_kalshi_events():
     return out
 
 
-def fetch_open_meteo(lat, lon, target_date, model):
+def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
+    """Fetch Open-Meteo daily max temp (°F) for target_date.
+
+    historical=True uses the historical-forecast archive (forecasts that were
+    issued before the date, used for backtesting). When historical=True the
+    response keys are model-suffixed (temperature_2m_max_<model>).
+    """
+    url = OPEN_METEO_HIST if historical else OPEN_METEO
     try:
-        r = session.get(OPEN_METEO, params={
+        r = session.get(url, params={
             "latitude": lat, "longitude": lon,
             "daily": "temperature_2m_max",
             "models": model,
@@ -144,11 +154,37 @@ def fetch_open_meteo(lat, lon, target_date, model):
             "end_date": target_date,
         }, timeout=15)
         r.raise_for_status()
-        vals = (r.json().get("daily") or {}).get("temperature_2m_max") or []
+        daily = r.json().get("daily") or {}
+        vals = daily.get("temperature_2m_max") or daily.get(f"temperature_2m_max_{model}") or []
         if vals and vals[0] is not None:
             return float(vals[0])
     except Exception as e:
-        print(f"[open-meteo:{model}] {e}", file=sys.stderr)
+        print(f"[open-meteo:{model}{':hist' if historical else ''}] {e}", file=sys.stderr)
+    return None
+
+
+def fetch_kalshi_candlestick(series, ticker, start_ts, end_ts, period_minutes=60):
+    """Return list of candlestick bars for a market over [start_ts, end_ts]."""
+    try:
+        return kalshi_get(f"/series/{series}/markets/{ticker}/candlesticks",
+                          {"start_ts": start_ts, "end_ts": end_ts,
+                           "period_interval": period_minutes}).get("candlesticks", []) or []
+    except Exception as e:
+        print(f"[kalshi candle] {ticker}: {e}", file=sys.stderr)
+        return []
+
+
+def yes_ask_at(series, ticker, decision_ts):
+    """YES ask price at decision_ts (or the closest bar ≤ that time)."""
+    window = 6 * 3600
+    bars = fetch_kalshi_candlestick(series, ticker,
+                                    decision_ts - window, decision_ts + 600, 60)
+    best = None
+    for b in bars:
+        if b["end_period_ts"] <= decision_ts + 600:
+            best = b
+    if best:
+        return to_float((best.get("yes_ask") or {}).get("close_dollars"))
     return None
 
 
@@ -462,12 +498,325 @@ def cmd_serve(args):
         print("\nshutting down", flush=True)
 
 
+# ---------- predict ----------
+
+def fetch_event_and_markets(event_ticker):
+    """Look up one event + its markets by ticker."""
+    series = event_ticker.split("-")[0]
+    try:
+        evs = kalshi_get("/events",
+                         {"series_ticker": series, "with_nested_markets": "true"}
+                         ).get("events", []) or []
+    except Exception as e:
+        sys.exit(f"failed to fetch series {series}: {e}")
+    ev = next((e for e in evs if e["event_ticker"] == event_ticker), None)
+    if ev is None:
+        for status in ("settled", "closed"):
+            try:
+                evs = kalshi_get("/events",
+                                 {"series_ticker": series, "status": status, "limit": 200}
+                                 ).get("events", []) or []
+                ev = next((e for e in evs if e["event_ticker"] == event_ticker), None)
+                if ev:
+                    break
+            except Exception:
+                continue
+    if ev is None:
+        sys.exit(f"event not found: {event_ticker}")
+    try:
+        markets = kalshi_get("/markets",
+                             {"event_ticker": event_ticker, "limit": 200}
+                             ).get("markets", []) or []
+    except Exception as e:
+        sys.exit(f"failed to fetch markets for {event_ticker}: {e}")
+    return ev, markets
+
+
+def cmd_predict(args):
+    ev, markets = fetch_event_and_markets(args.event_ticker)
+    data = build_event_data(ev, markets)
+    if data is None:
+        sys.exit(f"unsupported series: {ev['series_ticker']}")
+
+    probs = [m for m in data["markets"] if m.get("prob") is not None]
+    f = data["forecasts"]
+
+    if args.json:
+        out = {
+            "event_ticker": data["event_ticker"],
+            "title": data["title"],
+            "target_date": data["target_date"],
+            "station": data["station"],
+            "forecasts": f,
+            "model": data["model"],
+            "settled": data["settled"],
+            "settled_bucket": data["settled_bucket"],
+            "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
+            "best_ev_yes": (max((m for m in data["markets"] if m.get("ev_yes") is not None),
+                                key=lambda m: m["ev_yes"], default=None)),
+            "best_ev_no":  (max((m for m in data["markets"] if m.get("ev_no")  is not None),
+                                key=lambda m: m["ev_no"],  default=None)),
+            "markets": data["markets"],
+        }
+        print(json.dumps(out, indent=2))
+        return
+
+    print(f"Event:    {data['title']}")
+    print(f"Resolves: {data['target_date']} at {data['station']}")
+    print(f"Forecasts (°F): ECMWF {_fmtf(f['ecmwf'])}  GFS/HRRR {_fmtf(f['gfs'])}  "
+          f"NWS {_fmtf(f['nws'])}  METAR {_fmtf(f['metar'])}")
+    m = data["model"]
+    if m.get("mu") is not None:
+        print(f"Model: mu={m['mu']:.2f}°F  sigma={m['sigma']:.2f}°F  sources={m.get('sources')}")
+    else:
+        print("Model: unavailable (no forecast sources" +
+              (" — event settled" if data["settled"] else "") + ")")
+    if data["settled"]:
+        print(f"SETTLED: {data['settled_bucket']}")
+        return
+    if not probs:
+        return
+
+    top = max(probs, key=lambda m: m["prob"])
+    print()
+    print(f"Highest-probability bucket: {top['subtitle']}  ({top['prob']*100:.1f}%)")
+    print(f"  ticker:   {top['ticker']}")
+    print(f"  YES ask:  ${_money(top['yes_ask'])}    EV: {_signed(top['ev_yes'])}")
+    print(f"  NO  ask:  ${_money(top['no_ask'])}     EV: {_signed(top['ev_no'])}")
+
+    best_yes = max((m for m in data["markets"] if m.get("ev_yes") is not None),
+                   key=lambda m: m["ev_yes"], default=None)
+    best_no = max((m for m in data["markets"] if m.get("ev_no") is not None),
+                  key=lambda m: m["ev_no"], default=None)
+    if best_yes and best_yes["ticker"] != top["ticker"]:
+        print(f"Best EV YES: {best_yes['subtitle']} @ ${_money(best_yes['yes_ask'])} "
+              f"-> {_signed(best_yes['ev_yes'])} (model {best_yes['prob']*100:.1f}%)")
+    if best_no:
+        print(f"Best EV NO:  {best_no['subtitle']} @ ${_money(best_no['no_ask'])} "
+              f"-> {_signed(best_no['ev_no'])} (model {(1-best_no['prob'])*100:.1f}% no)")
+
+
+def _fmtf(v):  return "—" if v is None else f"{v:.1f}"
+def _money(v): return "—" if v is None else f"{v:.2f}"
+def _signed(v):
+    if v is None: return "—"
+    return f"{'+' if v >= 0 else ''}{v*100:.1f}c"
+
+
+# ---------- backtest ----------
+
+def list_events_for_series(series, days, status_options=("settled",)):
+    """Pull recent events (settled by default) for a series within `days` lookback."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    out, cursor = [], None
+    for status in status_options:
+        cursor = None
+        while True:
+            params = {"series_ticker": series, "status": status, "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                resp = kalshi_get("/events", params)
+            except Exception as e:
+                print(f"[kalshi] events {series} {status}: {e}", file=sys.stderr)
+                break
+            for ev in resp.get("events", []) or []:
+                try:
+                    strike = datetime.fromisoformat(ev["strike_date"].replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if strike >= cutoff:
+                    out.append(ev)
+            cursor = resp.get("cursor")
+            if not cursor:
+                break
+    # dedupe by event_ticker, keep oldest -> newest
+    seen, unique = set(), []
+    for ev in sorted(out, key=lambda e: e["strike_date"]):
+        if ev["event_ticker"] not in seen:
+            seen.add(ev["event_ticker"])
+            unique.append(ev)
+    return unique
+
+
+def backtest_one_event(event_ticker, lead_hours, threshold):
+    """Returns a dict describing the simulated bet for one event, or {'skipped': reason}."""
+    series = event_ticker.split("-")[0]
+    city = CITIES.get(series)
+    if not city:
+        return {"event": event_ticker, "skipped": "unsupported_series"}
+    try:
+        markets = kalshi_get("/markets", {"event_ticker": event_ticker, "limit": 200}
+                             ).get("markets", []) or []
+    except Exception as e:
+        return {"event": event_ticker, "skipped": f"market_fetch:{e}"}
+    if not markets:
+        return {"event": event_ticker, "skipped": "no_markets"}
+
+    winner = next((m for m in markets if m.get("result") == "yes"), None)
+    if winner is None:
+        return {"event": event_ticker, "skipped": "not_settled"}
+
+    target_date = event_local_date({"event_ticker": event_ticker,
+                                    "strike_date": markets[0].get("close_time", "")})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_ec  = pool.submit(fetch_open_meteo, city["lat"], city["lon"], target_date,
+                            "ecmwf_ifs025", historical=True)
+        f_gfs = pool.submit(fetch_open_meteo, city["lat"], city["lon"], target_date,
+                            "gfs_seamless", historical=True)
+        ecmwf, gfs = f_ec.result(), f_gfs.result()
+
+    sources = [v for v in (ecmwf, gfs) if v is not None]
+    if not sources:
+        return {"event": event_ticker, "skipped": "no_historical_forecast"}
+
+    mu = sum(sources) / len(sources)
+    spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
+    sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
+
+    ranked = []
+    for m in markets:
+        p = bucket_probability(m, mu, sigma)
+        if p is not None:
+            ranked.append((m, p))
+    if not ranked:
+        return {"event": event_ticker, "skipped": "no_probability"}
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    pick, pick_p = ranked[0]
+    if pick_p < threshold:
+        return {"event": event_ticker, "skipped": f"below_threshold({pick_p:.2f})"}
+
+    # decision time = close_time - lead_hours
+    try:
+        close_dt = datetime.fromisoformat(pick["close_time"].replace("Z", "+00:00"))
+    except Exception:
+        return {"event": event_ticker, "skipped": "no_close_time"}
+    decision_ts = int(close_dt.timestamp() - lead_hours * 3600)
+
+    price = yes_ask_at(series, pick["ticker"], decision_ts)
+    if price is None or price <= 0 or price >= 1.0:
+        return {"event": event_ticker, "skipped": "no_price"}
+
+    won = pick.get("result") == "yes"
+    pnl = (1.0 - price) if won else (-price)
+    return {
+        "event": event_ticker,
+        "target_date": target_date,
+        "winner_bucket": winner.get("subtitle"),
+        "picked_ticker": pick["ticker"],
+        "picked_bucket": pick.get("subtitle"),
+        "model_prob": pick_p,
+        "ecmwf": ecmwf, "gfs": gfs,
+        "mu": mu, "sigma": sigma,
+        "entry_price": price,
+        "won": won,
+        "pnl": pnl,
+    }
+
+
+def cmd_backtest(args):
+    if args.events:
+        tickers = [t.strip() for t in args.events.split(",") if t.strip()]
+    elif args.series:
+        evs = list_events_for_series(args.series, args.days)
+        tickers = [e["event_ticker"] for e in evs]
+    else:
+        sys.exit("backtest requires --events OR --series")
+
+    if not tickers:
+        sys.exit("no events to backtest")
+
+    print(f"Backtesting {len(tickers)} event(s) at T-{args.lead_hours}h "
+          f"(threshold={args.threshold:.2f})", file=sys.stderr)
+
+    results = []
+    for i, t in enumerate(tickers, 1):
+        r = backtest_one_event(t, args.lead_hours, args.threshold)
+        results.append(r)
+        if not args.json:
+            if "skipped" in r:
+                print(f"  [{i}/{len(tickers)}] {t}  SKIPPED ({r['skipped']})")
+            else:
+                tag = "WIN " if r["won"] else "LOSS"
+                print(f"  [{i}/{len(tickers)}] {t}  {tag}  "
+                      f"pick={r['picked_bucket']:<14} winner={r['winner_bucket']:<14} "
+                      f"P={r['model_prob']*100:5.1f}%  entry=${r['entry_price']:.2f}  "
+                      f"pnl={r['pnl']:+.3f}")
+
+    bets = [r for r in results if "skipped" not in r]
+    summary = _backtest_summary(bets)
+
+    if args.json:
+        print(json.dumps({"results": results, "summary": summary}, indent=2))
+        return
+
+    print()
+    print("=" * 60)
+    print(f"Events tested:    {len(results)}")
+    print(f"Bets placed:      {summary['bets']}")
+    print(f"Wins:             {summary['wins']} ({summary['win_rate']*100:.1f}%)")
+    print(f"Total P/L:        ${summary['total_pnl']:+.3f}")
+    print(f"Avg P/L per bet:  ${summary['avg_pnl']:+.4f}")
+    print(f"Max drawdown:     ${summary['max_drawdown']:.3f}")
+    print(f"Best win:         ${summary['best_win']:+.3f}")
+    print(f"Worst loss:       ${summary['worst_loss']:+.3f}")
+    if summary.get("skip_reasons"):
+        print()
+        print("Skipped:")
+        for reason, n in sorted(summary["skip_reasons"].items(), key=lambda x: -x[1]):
+            print(f"  {n:>3} × {reason}")
+
+
+def _backtest_summary(bets):
+    skipped = {}
+    if not bets:
+        return {"bets": 0, "wins": 0, "win_rate": 0.0, "total_pnl": 0.0,
+                "avg_pnl": 0.0, "max_drawdown": 0.0, "best_win": 0.0,
+                "worst_loss": 0.0, "skip_reasons": skipped}
+    wins = sum(1 for r in bets if r["won"])
+    pnls = [r["pnl"] for r in bets]
+    total = sum(pnls)
+    cum, peak, max_dd = 0.0, 0.0, 0.0
+    for p in pnls:
+        cum += p
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+    return {
+        "bets": len(bets),
+        "wins": wins,
+        "win_rate": wins / len(bets),
+        "total_pnl": total,
+        "avg_pnl": total / len(bets),
+        "max_drawdown": max_dd,
+        "best_win": max(pnls),
+        "worst_loss": min(pnls),
+    }
+
+
 def main():
     p = argparse.ArgumentParser(prog="kalshi_temp")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("serve", help="run the local dashboard HTTP server")
     s.add_argument("--port", type=int, default=8765)
     s.set_defaults(func=cmd_serve)
+
+    pr = sub.add_parser("predict", help="run the model on one event ticker")
+    pr.add_argument("event_ticker", help="e.g. KXHIGHNY-26MAY13")
+    pr.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    pr.set_defaults(func=cmd_predict)
+
+    bt = sub.add_parser("backtest", help="backtest the model against settled events")
+    bt.add_argument("--series", help="series ticker, e.g. KXHIGHNY")
+    bt.add_argument("--days", type=int, default=30, help="lookback window in days (default 30)")
+    bt.add_argument("--events", help="comma-separated event tickers (overrides --series)")
+    bt.add_argument("--lead-hours", dest="lead_hours", type=float, default=24.0,
+                    help="hours before market close to use as entry time (default 24)")
+    bt.add_argument("--threshold", type=float, default=0.0,
+                    help="min model probability required to place a bet (default 0)")
+    bt.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    bt.set_defaults(func=cmd_backtest)
+
     args = p.parse_args()
     args.func(args)
 
