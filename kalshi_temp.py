@@ -508,21 +508,27 @@ DASHBOARD_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kalshi Temp Predictor</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
          max-width: 1400px; margin: 0 auto; padding: 1rem;
-         background: #0f1115; color: #d8dde8; }
-  h1 { font-size: 1.3rem; margin: 0 0 1rem; display: flex; gap: 0.75rem; align-items: center; }
+         background: #0f1115; color: #d8dde8;
+         -webkit-text-size-adjust: 100%; }
+  h1 { font-size: 1.3rem; margin: 0 0 1rem; display: flex; gap: 0.75rem;
+       align-items: center; flex-wrap: wrap; }
   h1 small { color: #6b7280; font-weight: normal; font-size: 0.8rem; }
   .event { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px;
            padding: 1rem; margin-bottom: 1.25rem; }
   .event h2 { font-size: 1rem; margin: 0 0 0.4rem; }
   .summary { display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: 0.82rem; color: #a0a8b8; }
   .summary b { color: #e6ebf5; }
-  table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.85rem; }
-  th, td { padding: 0.35rem 0.5rem; text-align: right; border-bottom: 1px solid #232730; }
+  .event > table, .tool-out > table { /* fallback for legacy spots */ }
+  .table-wrap { overflow-x: auto; margin-top: 0.75rem; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { padding: 0.35rem 0.5rem; text-align: right; border-bottom: 1px solid #232730;
+           white-space: nowrap; }
   th { color: #8892a4; font-weight: 500; }
   th:first-child, td:first-child { text-align: left; }
   .pos { color: #56d364; }
@@ -560,6 +566,18 @@ DASHBOARD_HTML = r"""<!doctype html>
   .kv { display: inline-block; margin-right: 1rem; }
   .kv b { color: #e6ebf5; }
   @media (max-width: 900px) { .tools { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) {
+    body { padding: 0.6rem; }
+    h1 { font-size: 1.15rem; gap: 0.5rem; }
+    .tool h3 { flex-direction: column; align-items: flex-start; gap: 0.25rem; }
+    .presets { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+    .preset { margin-left: 0; padding: 0.4rem 0.7rem; font-size: 0.8rem; }
+    .tool input, .tool select, button { font-size: 0.95rem; padding: 0.5rem 0.6rem; }
+    .tool input[type=text] { min-width: 0; width: 100%; }
+    .summary { font-size: 0.78rem; gap: 0.6rem 1rem; }
+    table { font-size: 0.78rem; }
+    th, td { padding: 0.3rem 0.4rem; }
+  }
 </style>
 </head>
 <body>
@@ -665,7 +683,7 @@ function render(data) {
       html += mod + `</span>`;
     }
     html += `</div>`;
-    html += `<table><thead><tr>
+    html += `<div class="table-wrap"><table><thead><tr>
       <th>Bucket</th><th>Model P</th><th>YES bid</th><th>YES ask</th>
       <th>NO ask</th><th>EV (yes)</th><th>EV (no)</th><th>Vol 24h</th></tr></thead><tbody>`;
     for (const mk of ev.markets) {
@@ -681,7 +699,7 @@ function render(data) {
       html += `<td class="dim">${mk.vol_24h ? mk.vol_24h.toFixed(0) : '—'}</td>`;
       html += `</tr>`;
     }
-    html += `</tbody></table>`;
+    html += `</tbody></table></div>`;
     el.innerHTML = html;
     root.appendChild(el);
   }
@@ -786,7 +804,7 @@ function renderBacktest(d, out) {
   };
   let html = summaryRow('YES (high temp)', ys) + summaryRow('NO (best EV)', ns);
 
-  html += `<table><thead><tr>
+  html += `<div class="table-wrap"><table><thead><tr>
     <th>Event</th><th>Winner</th>
     <th>YES pick</th><th>YES P</th><th>YES entry</th><th>YES P/L</th>
     <th>NO pick</th><th>NO P_no</th><th>NO entry</th><th>NO P/L</th>
@@ -815,7 +833,7 @@ function renderBacktest(d, out) {
              + `<td class="${no.pnl >= 0 ? 'pos' : 'neg'}">${no.pnl >= 0 ? '+' : ''}${no.pnl.toFixed(3)}</td>`;
     html += `</tr>`;
   }
-  html += `</tbody></table>`;
+  html += `</tbody></table></div>`;
   out.innerHTML = html;
 }
 </script>
