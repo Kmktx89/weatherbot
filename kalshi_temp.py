@@ -73,26 +73,11 @@ SOURCE_WEIGHTS = {
     "KXHIGHPHIL": {"ecmwf_ifs025": 0.35, "gfs_seamless": 0.65},
 }
 
-# Per-city recommended decision lead time (hours before close_time). A
-# 30-day / 210-event sweep across leads [12, 18, 24, 36, 48] (see
-# sweep_leadtest.out) showed T-24h beats T-12h at every threshold on both
-# win rate and avg P/L per bet, with 36h slightly better still on avg P/L.
-# T-48h has no Kalshi candlestick data (markets aren't open that early), so
-# T-24h is the practical sweet spot. Win rates do not degrade going from
-# 12h to 36h, meaning forecast skill is stable across that horizon — the
-# economic edge comes entirely from better entry prices earlier in the
-# market's life. All cities settled at ~01:00 local the day after their
-# resolution day in the timeline study, so a uniform 24.0 lead applies.
-EVENT_LEAD_HOURS = {
-    "KXHIGHNY":   24.0,
-    "KXHIGHCHI":  24.0,
-    "KXHIGHMIA":  24.0,
-    "KXHIGHLAX":  24.0,
-    "KXHIGHDEN":  24.0,
-    "KXHIGHAUS":  24.0,
-    "KXHIGHPHIL": 24.0,
-}
-DEFAULT_LEAD_HOURS = 24.0  # used when EVENT_LEAD_HOURS has no entry for series
+# Decision lead time (hours before close_time) for backtest "auto" mode.
+# T-24h dominates T-12h on win rate and avg P/L per bet (see
+# sweep_leadtest.out). All KXHIGH cities close ~01:00 local the day after
+# resolution, so a uniform 24h lead applies across series.
+DEFAULT_LEAD_HOURS = 24.0
 
 
 def weighted_mean(series, ecmwf, gfs):
@@ -589,8 +574,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 <h1>Kalshi temperature predictor
   <small id="ts"></small>
   <button id="btn" onclick="refresh(true)">Refresh</button>
-  <button onclick="openScheduleWindow()" style="background:#2f4366;">Schedule</button>
-  <button onclick="openSourcesWindow()" style="background:#2f4366;">Sources</button>
+  <button onclick="openPane('/schedule', 'kt-schedule', 460, 460)" style="background:#2f4366;">Schedule</button>
+  <button onclick="openPane('/sources', 'kt-sources', 620, 720)" style="background:#2f4366;">Sources</button>
 </h1>
 <div id="err"></div>
 
@@ -647,20 +632,11 @@ const money  = v => v == null ? '—' : '$' + v.toFixed(2);
 const signed = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '¢';
 const cls    = v => v == null ? 'dim' : v > 0.03 ? 'pos' : v < -0.03 ? 'neg' : 'dim';
 
-// Opens the schedule as a standalone OS window (resizable, snappable, draggable).
-function openScheduleWindow() {
-  const w = 460, h = 460;
-  const left = Math.max(0, (screen.availWidth  - w) - 40);
-  const top  = Math.max(0, 80);
-  window.open('/schedule', 'kt-schedule',
-    `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
-}
-function openSourcesWindow() {
-  const w = 620, h = 720;
-  const left = Math.max(0, (screen.availWidth  - w) - 40);
-  const top  = Math.max(0, 80);
-  window.open('/sources', 'kt-sources',
-    `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+// Opens an aux page as a standalone OS window (resizable, snappable, draggable).
+function openPane(path, name, w, h) {
+  const left = Math.max(0, (screen.availWidth - w) - 40);
+  window.open(path, name,
+    `width=${w},height=${h},left=${left},top=80,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
 }
 
 async function refresh(force) {
@@ -1043,6 +1019,13 @@ SOURCES_HTML = r"""<!doctype html>
 """
 
 
+STATIC_PAGES = {
+    "/":         DASHBOARD_HTML.encode(),
+    "/schedule": SCHEDULE_HTML.encode(),
+    "/sources":  SOURCES_HTML.encode(),
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[http] %s\n" % (fmt % args))
@@ -1052,16 +1035,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path, qs = parsed.path, parse_qs(parsed.query)
 
-        if path == "/" or path.startswith("/index"):
-            self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode())
-            return
-
-        if path == "/schedule":
-            self._send(200, "text/html; charset=utf-8", SCHEDULE_HTML.encode())
-            return
-
-        if path == "/sources":
-            self._send(200, "text/html; charset=utf-8", SOURCES_HTML.encode())
+        key = "/" if path.startswith("/index") else path
+        page = STATIC_PAGES.get(key)
+        if page is not None:
+            self._send(200, "text/html; charset=utf-8", page)
             return
 
         if path == "/api/markets":
@@ -1376,14 +1353,14 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     strategies on a single settled event. Returns one dict with 'yes' and 'no'
     sub-outcomes, or {'skipped': reason} if the event is unusable.
 
-    lead_hours <= 0 means "use the per-city EVENT_LEAD_HOURS default".
+    lead_hours <= 0 means "use DEFAULT_LEAD_HOURS".
     """
     series = event_ticker.split("-")[0]
     city = CITIES.get(series)
     if not city:
         return {"event": event_ticker, "skipped": "unsupported_series"}
     if lead_hours <= 0:
-        lead_hours = EVENT_LEAD_HOURS.get(series, DEFAULT_LEAD_HOURS)
+        lead_hours = DEFAULT_LEAD_HOURS
     try:
         markets = kalshi_get("/markets", {"event_ticker": event_ticker, "limit": 200}
                              ).get("markets", []) or []
@@ -1669,7 +1646,7 @@ def main():
     bt.add_argument("--events", help="comma-separated event tickers (overrides --series)")
     bt.add_argument("--lead-hours", dest="lead_hours", type=float, default=0.0,
                     help="hours before market close to use as entry time; "
-                         "0 = auto (use per-city EVENT_LEAD_HOURS)")
+                         "0 = auto (use DEFAULT_LEAD_HOURS)")
     bt.add_argument("--threshold", type=float, default=0.0,
                     help="min model probability required to place a bet (default 0)")
     bt.add_argument("--json", action="store_true", help="emit JSON instead of text")

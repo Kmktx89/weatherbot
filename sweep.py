@@ -16,11 +16,11 @@ import argparse as _ap
 _p = _ap.ArgumentParser()
 _p.add_argument("--days", type=int, default=14)
 _p.add_argument("--min-bets", type=int, default=10)
-_p.add_argument("--leads", type=str, default="12,18,24,36,48",
-                help="comma-separated lead hours to test")
+_p.add_argument("--leads", type=int, nargs="+", default=[12, 18, 24, 36, 48],
+                help="lead hours to test (space-separated)")
 _args = _p.parse_args()
 DAYS = _args.days
-LEAD_HOURS = [int(x) for x in _args.leads.split(",") if x.strip()]
+LEAD_HOURS = _args.leads
 THRESHOLDS = [0.30, 0.40, 0.50, 0.60, 0.70]
 MIN_BETS = _args.min_bets  # ignore configs with too few bets when reporting top picks
 
