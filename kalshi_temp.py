@@ -73,21 +73,26 @@ SOURCE_WEIGHTS = {
     "KXHIGHPHIL": {"ecmwf_ifs025": 0.35, "gfs_seamless": 0.65},
 }
 
-# Per-city recommended decision lead time (hours before close_time), derived
-# from a resolution-timeline study: median time when each market's winning
-# bucket first crossed yes_bid >= 0.85 (i.e. the market "knew"), plus a 3-hour
-# safety buffer so we enter before consensus forms. Use as a smarter default
-# when the caller doesn't pass an explicit --lead-hours.
+# Per-city recommended decision lead time (hours before close_time). A
+# 30-day / 210-event sweep across leads [12, 18, 24, 36, 48] (see
+# sweep_leadtest.out) showed T-24h beats T-12h at every threshold on both
+# win rate and avg P/L per bet, with 36h slightly better still on avg P/L.
+# T-48h has no Kalshi candlestick data (markets aren't open that early), so
+# T-24h is the practical sweet spot. Win rates do not degrade going from
+# 12h to 36h, meaning forecast skill is stable across that horizon — the
+# economic edge comes entirely from better entry prices earlier in the
+# market's life. All cities settled at ~01:00 local the day after their
+# resolution day in the timeline study, so a uniform 24.0 lead applies.
 EVENT_LEAD_HOURS = {
-    "KXHIGHNY":   12.0,   # median resolves T-9.0h  (~4 PM local)
-    "KXHIGHCHI":  12.0,   # median resolves T-9.0h  (~4 PM local)
-    "KXHIGHMIA":  13.0,   # median resolves T-10.0h (~3 PM local)
-    "KXHIGHLAX":  14.5,   # median resolves T-11.5h (~2 PM local) — enters earlier
-    "KXHIGHDEN":  12.0,   # median resolves T-9.0h  (~4 PM local)
-    "KXHIGHAUS":  11.0,   # median resolves T-8.0h  (~5 PM local) — enters later
-    "KXHIGHPHIL": 12.0,   # median resolves T-9.0h  (~4 PM local)
+    "KXHIGHNY":   24.0,
+    "KXHIGHCHI":  24.0,
+    "KXHIGHMIA":  24.0,
+    "KXHIGHLAX":  24.0,
+    "KXHIGHDEN":  24.0,
+    "KXHIGHAUS":  24.0,
+    "KXHIGHPHIL": 24.0,
 }
-DEFAULT_LEAD_HOURS = 12.0  # used when EVENT_LEAD_HOURS has no entry for series
+DEFAULT_LEAD_HOURS = 24.0  # used when EVENT_LEAD_HOURS has no entry for series
 
 
 def weighted_mean(series, ecmwf, gfs):
@@ -286,7 +291,7 @@ def fetch_metar_today_max(icao, hours=10):
     """Max temperature (°F) observed at icao in the last `hours` hours."""
     try:
         r = session.get(METAR_URL,
-                        params={"ids": icao, "format": "json", "hoursBeforeNow": hours},
+                        params={"ids": icao, "format": "json", "hours": hours},
                         timeout=15)
         r.raise_for_status()
         data = r.json()
@@ -584,6 +589,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 <h1>Kalshi temperature predictor
   <small id="ts"></small>
   <button id="btn" onclick="refresh(true)">Refresh</button>
+  <button onclick="openScheduleWindow()" style="background:#2f4366;">Schedule</button>
+  <button onclick="openSourcesWindow()" style="background:#2f4366;">Sources</button>
 </h1>
 <div id="err"></div>
 
@@ -639,6 +646,22 @@ const pct    = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
 const money  = v => v == null ? '—' : '$' + v.toFixed(2);
 const signed = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '¢';
 const cls    = v => v == null ? 'dim' : v > 0.03 ? 'pos' : v < -0.03 ? 'neg' : 'dim';
+
+// Opens the schedule as a standalone OS window (resizable, snappable, draggable).
+function openScheduleWindow() {
+  const w = 460, h = 460;
+  const left = Math.max(0, (screen.availWidth  - w) - 40);
+  const top  = Math.max(0, 80);
+  window.open('/schedule', 'kt-schedule',
+    `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+function openSourcesWindow() {
+  const w = 620, h = 720;
+  const left = Math.max(0, (screen.availWidth  - w) - 40);
+  const top  = Math.max(0, 80);
+  window.open('/sources', 'kt-sources',
+    `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
 
 async function refresh(force) {
   const btn = document.getElementById('btn');
@@ -842,6 +865,184 @@ function renderBacktest(d, out) {
 """
 
 
+SCHEDULE_HTML = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entry windows</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         background: #0f1115; color: #d8dde8; margin: 0; padding: 1rem; }
+  h1 { font-size: 1.05rem; margin: 0 0 0.4rem; color: #e6ebf5; }
+  p  { font-size: 0.82rem; color: #a0a8b8; margin: 0 0 0.9rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid #232730; }
+  th { color: #8892a4; font-weight: 500; }
+  .status { font-weight: 600; }
+  .status.in    { color: #56d364; }
+  .status.pre   { color: #f0c674; }
+  .status.post  { color: #6b7280; }
+  .now { color: #8892a4; font-size: 0.75rem; margin-top: 0.75rem; }
+</style>
+</head><body>
+  <h1>Entry windows — submit selections for <u>tomorrow's</u> resolving market</h1>
+  <p>Window is centered on T-24h before close (close ≈ 01:00 local the day after the
+     market resolves). Sweep over 30d / 210 events shows 24h leads beat 12h on win rate
+     <i>and</i> avg P/L per bet at every threshold. See <code>sweep_leadtest.out</code>.</p>
+  <p><b>Note:</b> dashboard predictions are live and real-time — recomputed each refresh
+     from current ECMWF/GFS/NWS forecasts and current Kalshi prices. They are not
+     back-dated. The schedule below tells you <i>when to submit</i>; the picks themselves
+     are always fresh.</p>
+  <table>
+    <thead><tr><th>City</th><th>Window&nbsp;(local)</th><th>Window&nbsp;(ET)</th><th>Status</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="now" id="now"></div>
+<script>
+// All cities close at ~01:00 local the day after the resolution day, so a single
+// 19:00–23:00 local band lands at T-26h to T-30h — inside the 18–36h sweet spot
+// from the lead-hour sweep. offsetToET = hours to add to local time to get ET.
+const WINDOWS = [
+  { city: 'NYC',  tz: 'America/New_York',    start: 19, end: 23, offsetToET: 0 },
+  { city: 'CHI',  tz: 'America/Chicago',     start: 19, end: 23, offsetToET: 1 },
+  { city: 'MIA',  tz: 'America/New_York',    start: 19, end: 23, offsetToET: 0 },
+  { city: 'LAX',  tz: 'America/Los_Angeles', start: 19, end: 23, offsetToET: 3 },
+  { city: 'DEN',  tz: 'America/Denver',      start: 19, end: 23, offsetToET: 2 },
+  { city: 'AUS',  tz: 'America/Chicago',     start: 19, end: 23, offsetToET: 1 },
+  { city: 'PHIL', tz: 'America/New_York',    start: 19, end: 23, offsetToET: 0 },
+];
+
+function rangeLabel(startH, endH) {
+  const lbl = h => { const hh = ((h % 24) + 24) % 24;
+                     const p = hh < 12 ? 'AM' : 'PM';
+                     let h12 = hh % 12; if (h12 === 0) h12 = 12;
+                     return `${h12} ${p}`; };
+  return `${lbl(startH)}–${lbl(endH)}`;
+}
+function timeIn(tz) {
+  const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: 'numeric',
+                                                   hour12: false, timeZone: tz })
+                .formatToParts(new Date());
+  const h = +parts.find(p => p.type === 'hour').value;
+  const m = +parts.find(p => p.type === 'minute').value;
+  return { h, m };
+}
+function render() {
+  const rows = WINDOWS.map(w => {
+    const lo = timeIn(w.tz);
+    const hourDec = lo.h + lo.m / 60;
+    let status, cls;
+    if (hourDec < w.start)      { status = 'BEFORE';     cls = 'pre';  }
+    else if (hourDec <= w.end)  { status = 'IN WINDOW';  cls = 'in';   }
+    else                        { status = 'AFTER';      cls = 'post'; }
+    const etStart = w.start + w.offsetToET;
+    const etEnd   = w.end   + w.offsetToET;
+    return `<tr>
+      <td>${w.city}</td>
+      <td>${rangeLabel(w.start, w.end)}</td>
+      <td>${rangeLabel(etStart, etEnd)}</td>
+      <td class="status ${cls}">${status}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('rows').innerHTML = rows;
+  document.getElementById('now').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+render();
+setInterval(render, 30 * 1000); // refresh every 30s
+</script>
+</body></html>
+"""
+
+
+SOURCES_HTML = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data sources</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         background: #0f1115; color: #d8dde8; margin: 0; padding: 1rem 1.25rem;
+         line-height: 1.45; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; color: #e6ebf5; }
+  h2 { font-size: 0.95rem; margin: 1.2rem 0 0.35rem; color: #e6ebf5; }
+  p  { font-size: 0.86rem; color: #c0c7d4; margin: 0.3rem 0; }
+  .src { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 6px;
+         padding: 0.7rem 0.9rem; margin: 0.6rem 0; }
+  .src h3 { margin: 0 0 0.3rem; font-size: 0.95rem; color: #58a6ff; }
+  .src .meta { font-size: 0.78rem; color: #8892a4; margin: 0.2rem 0 0.4rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.4rem 0; }
+  th, td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid #232730; vertical-align: top; }
+  th { color: #8892a4; font-weight: 500; }
+  .live    { color: #56d364; font-weight: 600; }
+  .fcst    { color: #f0c674; font-weight: 600; }
+  code { background: #0f1115; padding: 0.05rem 0.3rem; border-radius: 3px;
+         font-size: 0.78rem; color: #c0c7d4; }
+  .tldr { background: #14181f; border-left: 3px solid #58a6ff;
+          padding: 0.55rem 0.8rem; font-size: 0.85rem; color: #d8dde8;
+          margin: 0.9rem 0; }
+</style>
+</head><body>
+  <h1>Data sources</h1>
+
+  <table>
+    <thead><tr><th>Source</th><th>Type</th><th>Location</th><th>Update cadence</th></tr></thead>
+    <tbody>
+      <tr><td>ECMWF</td>     <td class="fcst">Forecast</td> <td>Grid → station lat/lon</td> <td>2–4× per day</td></tr>
+      <tr><td>GFS/HRRR</td>  <td class="fcst">Forecast</td> <td>Grid → station lat/lon</td> <td>Up to hourly</td></tr>
+      <tr><td>NWS</td>       <td class="fcst">Forecast</td> <td>2.5km grid cell at station</td> <td>~Every 3 hours</td></tr>
+      <tr><td>METAR</td>     <td class="live">Live obs</td>   <td><b>Exactly the resolution station</b></td> <td>Hourly (~:51 past)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="src">
+    <h3>ECMWF</h3>
+    <div class="meta">European Centre for Medium-Range Weather Forecasts — IFS model, 0.25° grid. Pulled via Open-Meteo (<code>ecmwf_ifs025</code>).</div>
+    <p><b>Type:</b> <span class="fcst">Forecast</span> — today's predicted high temperature.</p>
+    <p><b>Location:</b> Global gridded model interpolated to the resolution station's lat/lon.</p>
+    <p><b>Updates:</b> ECMWF runs typically twice per day (00Z, 12Z; sometimes 06Z and 18Z too). A new forecast appears ~6–9 hours after each run, so you'll see updated values 2–4 times per day.</p>
+  </div>
+
+  <div class="src">
+    <h3>GFS / HRRR</h3>
+    <div class="meta">NOAA models. GFS = Global Forecast System (6h cadence). HRRR = High Resolution Rapid Refresh (1h cadence, CONUS). Open-Meteo blends them as <code>gfs_seamless</code>.</div>
+    <p><b>Type:</b> <span class="fcst">Forecast</span> — today's predicted high temperature.</p>
+    <p><b>Location:</b> Interpolated from grid to station's lat/lon. ~25 km grid (GFS) → ~3 km grid (HRRR) for the latest forecast hours.</p>
+    <p><b>Updates:</b> Up to <b>hourly</b> — HRRR refreshes every hour; GFS every 6 hours. This is usually the freshest of the three forecasts during the day.</p>
+  </div>
+
+  <div class="src">
+    <h3>NWS</h3>
+    <div class="meta">National Weather Service gridpoint forecast, pulled from <code>api.weather.gov</code>. The same forecast you'd see on weather.gov.</div>
+    <p><b>Type:</b> <span class="fcst">Forecast</span> — today's predicted high temperature.</p>
+    <p><b>Location:</b> NWS 2.5 km grid cell containing the resolution station's lat/lon.</p>
+    <p><b>Updates:</b> Typically every ~3 hours, sometimes more often when conditions change rapidly. This is the forecast Kalshi events conceptually align with (NWS is the national authority for U.S. weather).</p>
+  </div>
+
+  <div class="src">
+    <h3>METAR</h3>
+    <div class="meta">Routine hourly surface observation issued by the airport weather station (e.g., KAUS, KNYC). Pulled from <code>aviationweather.gov</code>.</div>
+    <p><b>Type:</b> <span class="live">Live observation</span> — the actual measured temperature at the station.</p>
+    <p><b>Location:</b> <b>Exactly the resolution station</b> — the same station Kalshi resolves the event against.</p>
+    <p><b>Updates:</b> A new METAR report every hour (~:51 past), plus occasional SPECI reports for rapid weather changes.</p>
+    <p><b>On the dashboard, the METAR line shows two numbers:</b></p>
+    <p>&nbsp;&nbsp;• <b>METAR</b> = the latest hourly reading (current temp)<br>
+       &nbsp;&nbsp;• <b>TODAY-MAX</b> = the highest temp observed at the station so far today</p>
+    <p>After the daily peak, <code>METAR</code> falls but <code>TODAY-MAX</code> stays at the peak — that's the running floor of where the day's high will resolve.</p>
+  </div>
+
+  <h2>How the model combines them</h2>
+  <p>Weighted mean: <b>ECMWF + GFS/HRRR at 70% combined</b> (50/50 per source for most cities; LAX is 10/90 because ECMWF overforecasts LAX), <b>NWS at 30%</b>, then a per-city bias correction, then conditioned on TODAY-MAX as a hard lower bound (the day's high can't be below what's already been observed).</p>
+
+  <div class="tldr">
+    <b>TL;DR:</b> METAR / TODAY-MAX = what's actually happening. ECMWF + GFS/HRRR + NWS = what's predicted to happen. Forecasts refresh through the day on different cadences; METAR refreshes every hour with a real measurement.
+  </div>
+
+</body></html>
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[http] %s\n" % (fmt % args))
@@ -853,6 +1054,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/" or path.startswith("/index"):
             self._send(200, "text/html; charset=utf-8", DASHBOARD_HTML.encode())
+            return
+
+        if path == "/schedule":
+            self._send(200, "text/html; charset=utf-8", SCHEDULE_HTML.encode())
+            return
+
+        if path == "/sources":
+            self._send(200, "text/html; charset=utf-8", SOURCES_HTML.encode())
             return
 
         if path == "/api/markets":
