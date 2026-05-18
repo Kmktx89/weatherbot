@@ -639,21 +639,54 @@ function openPane(path, name, w, h) {
     `width=${w},height=${h},left=${left},top=80,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
 }
 
+// Wake/idle recovery: backend may be groggy for ~1-15s after the laptop
+// resumes from sleep (watchdog runs every 60s). Retry the initial fetch a
+// few times so reloading the page or clicking the bookmark "just works"
+// instead of showing a transient error.
+async function fetchJsonWithRetry(url, onAttempt) {
+  const delays = [500, 1000, 2000, 4000, 8000];  // ~15.5s total budget
+  let err = null;
+  for (let i = 0; i <= delays.length; i++) {
+    if (onAttempt) onAttempt(i + 1, delays.length + 1);
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) {
+      err = e;
+      if (i < delays.length) await new Promise(res => setTimeout(res, delays[i]));
+    }
+  }
+  throw err;
+}
+
+let _refreshing = false;
 async function refresh(force) {
+  if (_refreshing) return;
+  _refreshing = true;
   const btn = document.getElementById('btn');
+  const errEl = document.getElementById('err');
   btn.disabled = true; btn.textContent = 'Loading…';
-  document.getElementById('err').textContent = '';
+  errEl.textContent = '';
   try {
-    const r = await fetch('/api/markets' + (force ? '?refresh=1' : ''));
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
+    const url = '/api/markets' + (force ? '?refresh=1' : '');
+    const data = await fetchJsonWithRetry(url, (n, total) => {
+      if (n > 1) errEl.textContent = `Reconnecting… (${n}/${total})`;
+    });
+    errEl.textContent = '';
     render(data);
   } catch (e) {
-    document.getElementById('err').textContent = 'Error: ' + e.message;
+    errEl.textContent = 'Error: ' + e.message + ' — will auto-retry on focus';
   } finally {
     btn.disabled = false; btn.textContent = 'Refresh';
+    _refreshing = false;
   }
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refresh(false);
+});
+window.addEventListener('online', () => refresh(false));
 
 function render(data) {
   document.getElementById('ts').textContent =
