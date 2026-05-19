@@ -10,6 +10,9 @@ balanced_v3.json
 balanced_dual.json
 nws_log.jsonl
 
+# PWA runtime profile (Chrome --user-data-dir for the app shortcut)
+chrome_app_profile/
+
 # C extensions
 *.so
 
