@@ -215,3 +215,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Model lab
+lab/.cache.sqlite
+lab/.cache.sqlite-journal
+lab/.cache.sqlite-wal
+lab/.cache.sqlite-shm
+shadow_picks.jsonl
