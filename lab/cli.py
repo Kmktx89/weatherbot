@@ -4,6 +4,7 @@ import json
 import sys
 
 from . import configs as _configs
+from .compare import compare as run_compare
 from .replay import replay_many, summarize
 
 
@@ -43,6 +44,25 @@ def cmd_replay(args):
               f"Avg PnL: ${s['avg_pnl']:+.3f}   Max DD: ${s['max_drawdown']:.2f}")
 
 
+def cmd_compare(args):
+    cfg_a = _configs.get(args.cfg_a)
+    cfg_b = _configs.get(args.cfg_b)
+    events = _resolve_events(args)
+    if not events:
+        sys.exit("no events resolved")
+    result = run_compare(events, cfg_a, cfg_b, bootstrap=args.bootstrap)
+    if args.json:
+        import dataclasses
+        print(json.dumps(dataclasses.asdict(result), indent=2))
+        return
+    print(f"A: {result.cfg_a}   B: {result.cfg_b}   Events: {len(events)}")
+    print(f"  A: bets {result.summary_a['bets']}  WR {result.summary_a['win_rate']*100:.1f}%  PnL ${result.summary_a['total_pnl']:+.2f}  DD ${result.summary_a['max_drawdown']:.2f}")
+    print(f"  B: bets {result.summary_b['bets']}  WR {result.summary_b['win_rate']*100:.1f}%  PnL ${result.summary_b['total_pnl']:+.2f}  DD ${result.summary_b['max_drawdown']:.2f}")
+    lo, hi = result.pnl_delta_ci
+    print(f"  PnL delta (B - A): ${result.pnl_delta:+.2f}   95% CI [${lo:+.2f}, ${hi:+.2f}]")
+    print(f"  Agreement: {result.agreement_rate*100:.1f}%   Decision flips: {len(result.decision_flips)}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -54,6 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--events", help="comma-separated event tickers (overrides --series)")
     pr.add_argument("--json", action="store_true")
     pr.set_defaults(func=cmd_replay)
+
+    cp = sub.add_parser("compare", help="A/B between two configs")
+    cp.add_argument("cfg_a")
+    cp.add_argument("cfg_b")
+    cp.add_argument("--days", type=int, default=30)
+    cp.add_argument("--series")
+    cp.add_argument("--events")
+    cp.add_argument("--bootstrap", type=int, default=1000)
+    cp.add_argument("--json", action="store_true")
+    cp.set_defaults(func=cmd_compare)
 
     return p
 
