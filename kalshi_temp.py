@@ -14,13 +14,14 @@ NWS, and current METAR observations.
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
 
@@ -500,6 +501,9 @@ DASHBOARD_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kalshi Temp Predictor</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon.png">
+<meta name="theme-color" content="#0f1115">
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -1059,6 +1063,29 @@ STATIC_PAGES = {
 }
 
 
+MANIFEST_JSON = json.dumps({
+    "name": "Weatherbot",
+    "short_name": "Weatherbot",
+    "description": "Kalshi temperature predictor",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#0f1115",
+    "theme_color": "#0f1115",
+    "icons": [
+        {"src": "/icon.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "any maskable"},
+    ],
+}).encode()
+
+_ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+try:
+    with open(_ICON_PATH, "rb") as _f:
+        ICON_PNG = _f.read()
+except FileNotFoundError:
+    ICON_PNG = b""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[http] %s\n" % (fmt % args))
@@ -1072,6 +1099,17 @@ class Handler(BaseHTTPRequestHandler):
         page = STATIC_PAGES.get(key)
         if page is not None:
             self._send(200, "text/html; charset=utf-8", page)
+            return
+
+        if path == "/manifest.webmanifest":
+            self._send(200, "application/manifest+json", MANIFEST_JSON)
+            return
+
+        if path == "/icon.png":
+            if ICON_PNG:
+                self._send(200, "image/png", ICON_PNG)
+            else:
+                self._send(404, "text/plain", b"icon not found")
             return
 
         if path == "/api/markets":
@@ -1140,11 +1178,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass
 
 
 def cmd_serve(args):
-    server = HTTPServer(("0.0.0.0", args.port), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     print(f"kalshi_temp dashboard: http://localhost:{args.port}/", flush=True)
     try:
         server.serve_forever()
