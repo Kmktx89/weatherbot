@@ -5,6 +5,7 @@ import sys
 
 from . import configs as _configs
 from .compare import compare as run_compare
+from .data_cache import default as default_cache
 from .decompose import decompose as run_decompose
 from .refit_bias import refit as run_refit
 from .replay import replay_many, summarize
@@ -99,6 +100,25 @@ def cmd_refit_bias(args):
     print("}")
 
 
+def cmd_cache(args):
+    cache = default_cache()
+    if args.action == "stats":
+        s = cache.stats()
+        if args.json:
+            print(json.dumps(s, indent=2))
+        else:
+            print(f"Total rows: {s['total']}   Oldest: {s['oldest']}")
+            for src, n in sorted(s["by_source"].items()):
+                print(f"  {src:<28} {n}")
+    elif args.action == "purge":
+        if not args.before:
+            sys.exit("purge requires --before YYYY-MM-DD")
+        n = cache.purge_before(args.before)
+        print(f"Purged {n} rows with target_date < {args.before}")
+    elif args.action == "warm":
+        sys.exit("warm is not yet implemented (follow-up)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -137,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--events")
     rb.add_argument("--json", action="store_true")
     rb.set_defaults(func=cmd_refit_bias)
+
+    cc = sub.add_parser("cache", help="manage the lab data cache")
+    cc.add_argument("action", choices=["stats", "purge", "warm"])
+    cc.add_argument("--before", help="for purge: target_date cutoff (YYYY-MM-DD)")
+    cc.add_argument("--json", action="store_true")
+    cc.set_defaults(func=cmd_cache)
 
     return p
 
