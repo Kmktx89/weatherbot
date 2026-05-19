@@ -505,7 +505,11 @@ DASHBOARD_HTML = r"""<!doctype html>
 <title>Kalshi Temp Predictor</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
 <meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Weatherbot">
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -568,7 +572,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     .tool h3 { flex-direction: column; align-items: flex-start; gap: 0.25rem; }
     .presets { display: flex; flex-wrap: wrap; gap: 0.25rem; }
     .preset { margin-left: 0; padding: 0.4rem 0.7rem; font-size: 0.8rem; }
-    .tool input, .tool select, button { font-size: 0.95rem; padding: 0.5rem 0.6rem; }
+    /* 16px minimum on inputs prevents iOS Safari from auto-zooming on focus. */
+    .tool input, .tool select, button { font-size: 1rem; padding: 0.5rem 0.6rem; }
     .tool input[type=text] { min-width: 0; width: 100%; }
     .summary { font-size: 0.78rem; gap: 0.6rem 1rem; }
     table { font-size: 0.78rem; }
@@ -638,8 +643,19 @@ const money  = v => v == null ? '—' : '$' + v.toFixed(2);
 const signed = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '¢';
 const cls    = v => v == null ? 'dim' : v > 0.03 ? 'pos' : v < -0.03 ? 'neg' : 'dim';
 
-// Opens an aux page as a standalone OS window (resizable, snappable, draggable).
+// Opens an aux page. On desktop it's a separate OS window (resizable,
+// snappable, draggable). On iOS / Android / standalone PWAs, window.open
+// either ignores the dimensions and breaks out of the PWA, or fails
+// silently — so navigate in-tab instead. The aux pages have a "back"
+// link for that path.
 function openPane(path, name, w, h) {
+  const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+                    || window.navigator.standalone === true;
+  const isMobile = window.innerWidth < 700 || /iPad|iPhone|iPod|Android/i.test(navigator.userAgent);
+  if (isStandalone || isMobile) {
+    window.location.href = path;
+    return;
+  }
   const left = Math.max(0, (screen.availWidth - w) - 40);
   window.open(path, name,
     `width=${w},height=${h},left=${left},top=80,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
@@ -885,6 +901,10 @@ SCHEDULE_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entry windows</title>
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -899,8 +919,12 @@ SCHEDULE_HTML = r"""<!doctype html>
   .status.pre   { color: #f0c674; }
   .status.post  { color: #6b7280; }
   .now { color: #8892a4; font-size: 0.75rem; margin-top: 0.75rem; }
+  .back { display: inline-block; color: #58a6ff; text-decoration: none;
+          font-size: 0.85rem; margin-bottom: 0.6rem; }
+  .back:hover { text-decoration: underline; }
 </style>
 </head><body>
+  <a class="back" href="/">← Dashboard</a>
   <h1>Entry windows — submit selections for <u>tomorrow's</u> resolving market</h1>
   <p>Window is centered on T-24h before close (close ≈ 01:00 local the day after the
      market resolves). Sweep over 30d / 210 events shows 24h leads beat 12h on win rate
@@ -975,6 +999,10 @@ SOURCES_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Data sources</title>
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -997,8 +1025,12 @@ SOURCES_HTML = r"""<!doctype html>
   .tldr { background: #14181f; border-left: 3px solid #58a6ff;
           padding: 0.55rem 0.8rem; font-size: 0.85rem; color: #d8dde8;
           margin: 0.9rem 0; }
+  .back { display: inline-block; color: #58a6ff; text-decoration: none;
+          font-size: 0.85rem; margin-bottom: 0.6rem; }
+  .back:hover { text-decoration: underline; }
 </style>
 </head><body>
+  <a class="back" href="/">← Dashboard</a>
   <h1>Data sources</h1>
 
   <table>
