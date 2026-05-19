@@ -222,5 +222,3 @@ lab/.cache.sqlite-journal
 lab/.cache.sqlite-wal
 lab/.cache.sqlite-shm
 shadow_picks.jsonl
-*.pyc
-*.pyo
