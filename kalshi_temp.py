@@ -397,7 +397,6 @@ def build_event_data(ev, markets):
 
     forecasts = {"ecmwf": ecmwf, "gfs": gfs, "nws": nws, "metar": metar,
                  "today_max": today_max}
-    sources = [v for v in (ecmwf, gfs, nws) if v is not None]
 
     settled_bucket = None
     for m in markets:
@@ -406,46 +405,41 @@ def build_event_data(ev, markets):
             break
     settled = settled_bucket is not None
 
-    if not sources or settled:
+    if settled:
         model = {"mu": None, "sigma": None}
-        out_markets = [dict(_market_summary(m), prob=None, ev_yes=None, ev_no=None) for m in markets]
+        out_markets = [dict(_market_summary(m), prob=None, ev_yes=None, ev_no=None)
+                       for m in markets]
     else:
-        mu_raw = weighted_mean(series, ecmwf, gfs)
-        if mu_raw is None:
-            mu_raw = sum(sources) / len(sources)
-        # NWS forecast is the most station-specific source (Kalshi resolves on
-        # the NWS Climatological Report at the same station). Blended at 30%.
-        # KNOWN LIMITATION: the BIAS table was fit on ECMWF+GFS weighted_mean
-        # only — historical NWS forecasts aren't archived by Open-Meteo, so we
-        # can't backtest with NWS in the blend. Adding NWS here introduces a
-        # residual bias of ~0.3 * (NWS_bias - BIAS[series]), expected to be
-        # small (< ~0.5°F) but uncalibrated. Forward logging to nws_log.jsonl
-        # will let us refit BIAS for the blended model after ~30 settled events
-        # per city accumulate (~4-6 weeks).
-        if nws is not None:
-            mu_raw = 0.7 * mu_raw + 0.3 * nws
-        bias = BIAS.get(series, 0.0)
-        mu = mu_raw - bias
-        spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
-        sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
-
-        truncation = None
-        if today_max is not None:
-            truncation = today_max - 0.5  # METAR readings round; give 0.5°F headroom
-            if truncation > mu:
-                mu = truncation + 0.3  # forecast can't be cooler than observed peak
-
-        model = {"mu": mu, "mu_raw": mu_raw, "bias": bias,
-                 "sigma": sigma, "sources": len(sources),
-                 "today_max": today_max, "truncation": truncation}
-
-        out_markets = []
-        for m in markets:
-            prob = bucket_probability(m, mu, sigma, lower_truncation=truncation)
-            ya, na = to_float(m.get("yes_ask_dollars")), to_float(m.get("no_ask_dollars"))
-            ev_yes = (prob - ya) if (prob is not None and ya not in (None, 0.0)) else None
-            ev_no = ((1 - prob) - na) if (prob is not None and na not in (None, 0.0)) else None
-            out_markets.append(dict(_market_summary(m), prob=prob, ev_yes=ev_yes, ev_no=ev_no))
+        from model import ModelInputs, compute
+        from lab.configs import LIVE_TODAY
+        inputs = ModelInputs(
+            series=series, event_ticker=ev["event_ticker"], target_date=target,
+            forecasts={"ecmwf": ecmwf, "gfs": gfs, "nws": nws},
+            metar_current=metar, today_max=today_max,
+            markets=markets,
+            decision_ts=int(time.time()),
+            fetched_at=int(time.time()),
+        )
+        out = compute(inputs, LIVE_TODAY)
+        if out.mu is None:
+            model = {"mu": None, "sigma": None}
+            out_markets = [dict(_market_summary(m), prob=None, ev_yes=None, ev_no=None)
+                           for m in markets]
+        else:
+            sources_count = sum(1 for k in ("ecmwf", "gfs", "nws")
+                                if forecasts.get(k) is not None)
+            model = {"mu": out.mu, "mu_raw": out.mu_raw, "bias": out.bias_applied,
+                     "sigma": out.sigma, "sources": sources_count,
+                     "today_max": today_max, "truncation": out.truncation}
+            out_markets = []
+            for m in markets:
+                prob = out.probs.get(m["ticker"])
+                ya = to_float(m.get("yes_ask_dollars"))
+                na = to_float(m.get("no_ask_dollars"))
+                ev_yes = (prob - ya) if (prob is not None and ya not in (None, 0.0)) else None
+                ev_no = ((1 - prob) - na) if (prob is not None and na not in (None, 0.0)) else None
+                out_markets.append(dict(_market_summary(m), prob=prob,
+                                        ev_yes=ev_yes, ev_no=ev_no))
 
     out_markets.sort(key=lambda x: x["_sort"])
     return {
