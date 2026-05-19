@@ -441,6 +441,14 @@ def build_event_data(ev, markets):
                 out_markets.append(dict(_market_summary(m), prob=prob,
                                         ev_yes=ev_yes, ev_no=ev_no))
 
+            # Shadow A/B: compute candidate configs on the same inputs.
+            try:
+                from shadow.runner import run_shadow
+                from shadow.active import ACTIVE_SHADOWS
+                run_shadow(inputs, ACTIVE_SHADOWS)
+            except Exception as e:
+                print(f"[shadow] {e}", file=sys.stderr)
+
     out_markets.sort(key=lambda x: x["_sort"])
     return {
         "event_ticker": ev["event_ticker"],
