@@ -38,5 +38,6 @@ CODE_VERSION: str = _resolve_code_version()
 
 from .config import ModelConfig, TodayMaxMode
 from .types import ModelInputs, ModelOutput
+from .compute import compute
 
-__all__ = ["CODE_VERSION", "ModelConfig", "ModelInputs", "ModelOutput", "TodayMaxMode"]
+__all__ = ["CODE_VERSION", "ModelConfig", "ModelInputs", "ModelOutput", "TodayMaxMode", "compute"]
