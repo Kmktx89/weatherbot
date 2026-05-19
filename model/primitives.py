@@ -80,3 +80,61 @@ def bucket_probability(
     eff_lower = max(lower, lower_truncation)
     raw = normal_cdf(upper, mu, sigma) - normal_cdf(eff_lower, mu, sigma)
     return max(0.0, raw / denom)
+
+
+from datetime import datetime, timedelta, timezone
+
+
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
+
+
+def event_local_date(ev: Mapping) -> str:
+    """Decode 'KXHIGHNY-26MAY12' -> '2026-05-12'.
+
+    Falls back to strike_date − 12h heuristic, then to today UTC.
+    """
+    try:
+        suffix = ev["event_ticker"].rsplit("-", 1)[-1]
+        yy = int(suffix[:2])
+        mon = _MONTHS[suffix[2:5].upper()]
+        day = int(suffix[5:])
+        return f"{2000 + yy:04d}-{mon:02d}-{day:02d}"
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(ev["strike_date"].replace("Z", "+00:00"))
+        return (dt - timedelta(hours=12)).date().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def apply_today_max(mu: float, today_max: float, cfg) -> tuple[float | None, float, bool]:
+    """Apply the TODAY-MAX adjustment per cfg.today_max_mode.
+
+    Returns (truncation, mu_adjusted, active).
+
+    Modes:
+        "off"       — no adjustment. Returns (None, mu, False).
+        "truncate"  — pass `today_max - headroom` as lower-truncation to the
+                      CDF. mu unchanged. Active iff truncation > mu.
+        "push"      — if truncation > mu, raise mu to `truncation + push`.
+                      Do NOT also pass truncation to the CDF.
+        "both"      — current production behaviour: both push mu AND pass
+                      truncation to the CDF. (Known to double-count.)
+    """
+    if cfg.today_max_mode == "off":
+        return None, mu, False
+    truncation = today_max - cfg.today_max_headroom
+    over = truncation > mu
+    if cfg.today_max_mode == "truncate":
+        return truncation, mu, over
+    if cfg.today_max_mode == "push":
+        if over:
+            return None, truncation + cfg.today_max_push, True
+        return None, mu, False
+    if cfg.today_max_mode == "both":
+        if over:
+            return truncation, truncation + cfg.today_max_push, True
+        return truncation, mu, False
+    raise ValueError(f"unknown today_max_mode: {cfg.today_max_mode!r}")

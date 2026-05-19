@@ -97,3 +97,66 @@ def test_bucket_probability_sigma_zero_point_mass():
     # At sigma=0, prob is 1.0 if mu falls in the bucket, else 0.
     assert bucket_probability((69.5, 72.5), mu=71.0, sigma=0.0) == 1.0
     assert bucket_probability((60.0, 65.0), mu=71.0, sigma=0.0) == 0.0
+
+
+from model.primitives import apply_today_max, event_local_date
+
+
+# --- apply_today_max --------------------------------------------------
+
+def _mode(name, headroom=0.5, push=0.3):
+    from model.config import ModelConfig
+    return ModelConfig(
+        name="t", source_weights={}, nws_blend=0.0, bias_table={},
+        base_sigma=2.0, sigma_sources=("ecmwf", "gfs"),
+        today_max_mode=name, today_max_headroom=headroom, today_max_push=push,
+        sanity_no_yes_ask_min=0.85, sanity_no_prob_max=0.40,
+        decision_lead_hours=24.0,
+    )
+
+def test_apply_today_max_off():
+    trunc, mu, active = apply_today_max(mu=71.0, today_max=78.0, cfg=_mode("off"))
+    assert trunc is None and mu == 71.0 and active is False
+
+def test_apply_today_max_truncate_above_mu():
+    # today_max=78, headroom=0.5 -> truncation=77.5. mu=71, so truncation > mu.
+    trunc, mu, active = apply_today_max(71.0, 78.0, _mode("truncate"))
+    assert trunc == 77.5 and mu == 71.0 and active is True
+
+def test_apply_today_max_truncate_below_mu():
+    trunc, mu, active = apply_today_max(80.0, 70.0, _mode("truncate"))
+    assert trunc == 69.5 and mu == 80.0 and active is False
+
+def test_apply_today_max_push_above_mu():
+    trunc, mu, active = apply_today_max(71.0, 78.0, _mode("push"))
+    assert trunc is None and mu == 77.5 + 0.3 and active is True
+
+def test_apply_today_max_push_below_mu():
+    trunc, mu, active = apply_today_max(80.0, 70.0, _mode("push"))
+    assert trunc is None and mu == 80.0 and active is False
+
+def test_apply_today_max_both_above_mu():
+    # current production behaviour (the double-counting case)
+    trunc, mu, active = apply_today_max(71.0, 78.0, _mode("both"))
+    assert trunc == 77.5 and mu == 77.5 + 0.3 and active is True
+
+def test_apply_today_max_both_below_mu():
+    trunc, mu, active = apply_today_max(80.0, 70.0, _mode("both"))
+    assert trunc == 69.5 and mu == 80.0 and active is False
+
+
+# --- event_local_date -------------------------------------------------
+
+def test_event_local_date_ticker_suffix():
+    assert event_local_date({"event_ticker": "KXHIGHNY-26MAY13"}) == "2026-05-13"
+    assert event_local_date({"event_ticker": "KXHIGHCHI-26JAN05"}) == "2026-01-05"
+
+def test_event_local_date_strike_fallback():
+    ev = {"event_ticker": "KXHIGHNY-BAD", "strike_date": "2026-05-14T05:00:00Z"}
+    # strike_date 05:00Z = 01:00 ET = day-after close, so target should be prior day
+    assert event_local_date(ev) == "2026-05-13"
+
+def test_event_local_date_unparseable_returns_today_utc():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert event_local_date({"event_ticker": "GARBAGE"}) == today
