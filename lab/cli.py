@@ -9,6 +9,7 @@ from .data_cache import default as default_cache
 from .decompose import decompose as run_decompose
 from .refit_bias import refit as run_refit
 from .replay import replay_many, summarize
+from .shadow_summary import summarize as run_shadow_summary
 
 
 _DEFAULT_VARIANTS = ["live-minus-nws", "live-minus-trunc", "live-minus-push"]
@@ -119,6 +120,19 @@ def cmd_cache(args):
         sys.exit("warm is not yet implemented (follow-up)")
 
 
+def cmd_shadow_summary(args):
+    result = run_shadow_summary(args.config, days=args.days)
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+    s = result["summary"]
+    print(f"Config: {s['config']}   Days: {args.days}")
+    print(f"  Events seen: {s['events_seen']}   Bets: {s['bets']}   "
+          f"WR: {s['win_rate']*100:.1f}%   PnL: ${s['total_pnl']:+.2f}")
+    if s["skips"]:
+        print(f"  Skips: " + ", ".join(f"{n}× {k}" for k, n in s["skips"].items()))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -163,6 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
     cc.add_argument("--before", help="for purge: target_date cutoff (YYYY-MM-DD)")
     cc.add_argument("--json", action="store_true")
     cc.set_defaults(func=cmd_cache)
+
+    ss = sub.add_parser("shadow-summary", help="A/B report from shadow_picks.jsonl")
+    ss.add_argument("--config", required=True)
+    ss.add_argument("--days", type=int, default=14)
+    ss.add_argument("--json", action="store_true")
+    ss.set_defaults(func=cmd_shadow_summary)
 
     return p
 
