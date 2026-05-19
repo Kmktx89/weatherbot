@@ -5,7 +5,11 @@ import sys
 
 from . import configs as _configs
 from .compare import compare as run_compare
+from .decompose import decompose as run_decompose
 from .replay import replay_many, summarize
+
+
+_DEFAULT_VARIANTS = ["live-minus-nws", "live-minus-trunc", "live-minus-push"]
 
 
 def _resolve_events(args) -> list[str]:
@@ -63,6 +67,23 @@ def cmd_compare(args):
     print(f"  Agreement: {result.agreement_rate*100:.1f}%   Decision flips: {len(result.decision_flips)}")
 
 
+def cmd_decompose(args):
+    baseline = _configs.get(args.against)
+    variant_names = (args.variants.split(",") if args.variants
+                     else _DEFAULT_VARIANTS)
+    variants = [_configs.get(n) for n in variant_names]
+    events = _resolve_events(args)
+    if not events:
+        sys.exit("no events resolved")
+    result = run_decompose(events, baseline, variants)
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+    print(f"Decomposing {baseline.name} vs {len(variants)} variants over {len(events)} events")
+    for v in result["variants"]:
+        print(f"  {v['variant']:<22}  attrib ${v['pnl_delta_attrib']:+.2f}   flips {v['decision_flips']}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -84,6 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--bootstrap", type=int, default=1000)
     cp.add_argument("--json", action="store_true")
     cp.set_defaults(func=cmd_compare)
+
+    dp = sub.add_parser("decompose", help="prob/PnL attribution across variants")
+    dp.add_argument("--against", default="live-today")
+    dp.add_argument("--variants", help="comma-separated names; default = minus-nws,minus-trunc,minus-push")
+    dp.add_argument("--days", type=int, default=30)
+    dp.add_argument("--series")
+    dp.add_argument("--events")
+    dp.add_argument("--json", action="store_true")
+    dp.set_defaults(func=cmd_decompose)
 
     return p
 
