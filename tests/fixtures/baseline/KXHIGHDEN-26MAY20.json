@@ -1,0 +1,83 @@
+{
+  "event_ticker": "KXHIGHDEN-26MAY20",
+  "series": "KXHIGHDEN",
+  "target_date": "2026-05-20",
+  "forecasts": {
+    "ecmwf": 58.2,
+    "gfs": 55.4,
+    "nws": 59.0
+  },
+  "metar_current": 46.04,
+  "today_max": null,
+  "markets": [
+    {
+      "floor_strike": 61,
+      "no_ask_dollars": "0.9100",
+      "strike_type": "greater",
+      "ticker": "KXHIGHDEN-26MAY20-T61",
+      "yes_ask_dollars": "0.1000",
+      "yes_bid_dollars": "0.0900"
+    },
+    {
+      "cap_strike": 54,
+      "no_ask_dollars": "0.9300",
+      "strike_type": "less",
+      "ticker": "KXHIGHDEN-26MAY20-T54",
+      "yes_ask_dollars": "0.0800",
+      "yes_bid_dollars": "0.0700"
+    },
+    {
+      "cap_strike": 59,
+      "floor_strike": 58,
+      "no_ask_dollars": "0.7100",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY20-B58.5",
+      "yes_ask_dollars": "0.3000",
+      "yes_bid_dollars": "0.2900"
+    },
+    {
+      "cap_strike": 61,
+      "floor_strike": 60,
+      "no_ask_dollars": "0.8100",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY20-B60.5",
+      "yes_ask_dollars": "0.2300",
+      "yes_bid_dollars": "0.1900"
+    },
+    {
+      "cap_strike": 57,
+      "floor_strike": 56,
+      "no_ask_dollars": "0.7500",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY20-B56.5",
+      "yes_ask_dollars": "0.2600",
+      "yes_bid_dollars": "0.2500"
+    },
+    {
+      "cap_strike": 55,
+      "floor_strike": 54,
+      "no_ask_dollars": "0.8900",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY20-B54.5",
+      "yes_ask_dollars": "0.1200",
+      "yes_bid_dollars": "0.1100"
+    }
+  ],
+  "captured_at": 1779222847,
+  "expected": {
+    "mu": 58.269999999999996,
+    "sigma": 2.5263060428661896,
+    "mu_raw": 57.459999999999994,
+    "bias_applied": -0.81,
+    "truncation": null,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHDEN-26MAY20-T54": 0.029504096842019933,
+      "KXHIGHDEN-26MAY20-B54.5": 0.10693410202321202,
+      "KXHIGHDEN-26MAY20-B56.5": 0.24382376769876662,
+      "KXHIGHDEN-26MAY20-B58.5": 0.30656524081778946,
+      "KXHIGHDEN-26MAY20-B60.5": 0.21264441010373747,
+      "KXHIGHDEN-26MAY20-T61": 0.10052838251447449
+    }
+  }
+}

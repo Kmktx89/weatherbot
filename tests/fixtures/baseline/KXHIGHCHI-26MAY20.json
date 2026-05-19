@@ -1,0 +1,89 @@
+{
+  "event_ticker": "KXHIGHCHI-26MAY20",
+  "series": "KXHIGHCHI",
+  "target_date": "2026-05-20",
+  "forecasts": {
+    "ecmwf": 61.2,
+    "gfs": 59.3,
+    "nws": 55.0
+  },
+  "metar_current": 78.98,
+  "today_max": null,
+  "markets": [
+    {
+      "cap_strike": 64,
+      "floor_strike": 63,
+      "no_ask_dollars": "0.9500",
+      "strike_type": "between",
+      "subtitle": "63\u00b0 to 64\u00b0",
+      "ticker": "KXHIGHCHI-26MAY20-B63.5",
+      "yes_ask_dollars": "0.0700",
+      "yes_bid_dollars": "0.0500"
+    },
+    {
+      "cap_strike": 57,
+      "no_ask_dollars": "0.8700",
+      "strike_type": "less",
+      "subtitle": "56\u00b0 or below",
+      "ticker": "KXHIGHCHI-26MAY20-T57",
+      "yes_ask_dollars": "0.1500",
+      "yes_bid_dollars": "0.1300"
+    },
+    {
+      "cap_strike": 60,
+      "floor_strike": 59,
+      "no_ask_dollars": "0.6700",
+      "strike_type": "between",
+      "subtitle": "59\u00b0 to 60\u00b0",
+      "ticker": "KXHIGHCHI-26MAY20-B59.5",
+      "yes_ask_dollars": "0.3400",
+      "yes_bid_dollars": "0.3300"
+    },
+    {
+      "cap_strike": 58,
+      "floor_strike": 57,
+      "no_ask_dollars": "0.7100",
+      "strike_type": "between",
+      "subtitle": "57\u00b0 to 58\u00b0",
+      "ticker": "KXHIGHCHI-26MAY20-B57.5",
+      "yes_ask_dollars": "0.3000",
+      "yes_bid_dollars": "0.2900"
+    },
+    {
+      "floor_strike": 64,
+      "no_ask_dollars": "0.9700",
+      "strike_type": "greater",
+      "subtitle": "65\u00b0 or above",
+      "ticker": "KXHIGHCHI-26MAY20-T64",
+      "yes_ask_dollars": "0.0400",
+      "yes_bid_dollars": "0.0300"
+    },
+    {
+      "cap_strike": 62,
+      "floor_strike": 61,
+      "no_ask_dollars": "0.8700",
+      "strike_type": "between",
+      "subtitle": "61\u00b0 to 62\u00b0",
+      "ticker": "KXHIGHCHI-26MAY20-B61.5",
+      "yes_ask_dollars": "0.1600",
+      "yes_bid_dollars": "0.1300"
+    }
+  ],
+  "captured_at": 1779222789,
+  "expected": {
+    "mu": 59.582,
+    "sigma": 3.2751590292177677,
+    "mu_raw": 58.542,
+    "bias_applied": -1.04,
+    "truncation": null,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHCHI-26MAY20-T57": 0.17334653441595593,
+      "KXHIGHCHI-26MAY20-B57.5": 0.19721531695453132,
+      "KXHIGHCHI-26MAY20-B59.5": 0.23981130220998026,
+      "KXHIGHCHI-26MAY20-B61.5": 0.20314860852183036,
+      "KXHIGHCHI-26MAY20-B63.5": 0.11987885263527587,
+      "KXHIGHCHI-26MAY20-T64": 0.06659938526242626
+    }
+  }
+}

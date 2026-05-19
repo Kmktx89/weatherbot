@@ -1,0 +1,83 @@
+{
+  "event_ticker": "KXHIGHLAX-26MAY20",
+  "series": "KXHIGHLAX",
+  "target_date": "2026-05-20",
+  "forecasts": {
+    "ecmwf": 88.6,
+    "gfs": 79.8,
+    "nws": 73.0
+  },
+  "metar_current": 71.96,
+  "today_max": null,
+  "markets": [
+    {
+      "cap_strike": 76,
+      "floor_strike": 75,
+      "no_ask_dollars": "0.6900",
+      "strike_type": "between",
+      "ticker": "KXHIGHLAX-26MAY20-B75.5",
+      "yes_ask_dollars": "0.3200",
+      "yes_bid_dollars": "0.3100"
+    },
+    {
+      "cap_strike": 70,
+      "floor_strike": 69,
+      "no_ask_dollars": "0.9900",
+      "strike_type": "between",
+      "ticker": "KXHIGHLAX-26MAY20-B69.5",
+      "yes_ask_dollars": "0.0200",
+      "yes_bid_dollars": "0.0100"
+    },
+    {
+      "cap_strike": 74,
+      "floor_strike": 73,
+      "no_ask_dollars": "0.9400",
+      "strike_type": "between",
+      "ticker": "KXHIGHLAX-26MAY20-B73.5",
+      "yes_ask_dollars": "0.0700",
+      "yes_bid_dollars": "0.0600"
+    },
+    {
+      "floor_strike": 76,
+      "no_ask_dollars": "0.4000",
+      "strike_type": "greater",
+      "ticker": "KXHIGHLAX-26MAY20-T76",
+      "yes_ask_dollars": "0.6200",
+      "yes_bid_dollars": "0.6000"
+    },
+    {
+      "cap_strike": 72,
+      "floor_strike": 71,
+      "no_ask_dollars": "0.9800",
+      "strike_type": "between",
+      "ticker": "KXHIGHLAX-26MAY20-B71.5",
+      "yes_ask_dollars": "0.0300",
+      "yes_bid_dollars": "0.0200"
+    },
+    {
+      "cap_strike": 69,
+      "no_ask_dollars": "1.0000",
+      "strike_type": "less",
+      "ticker": "KXHIGHLAX-26MAY20-T69",
+      "yes_ask_dollars": "0.0100",
+      "yes_bid_dollars": "0.0000"
+    }
+  ],
+  "captured_at": 1779222846,
+  "expected": {
+    "mu": 78.92599999999999,
+    "sigma": 6.69195204870912,
+    "mu_raw": 78.37599999999999,
+    "bias_applied": -0.55,
+    "truncation": null,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHLAX-26MAY20-T69": 0.05961770965675539,
+      "KXHIGHLAX-26MAY20-B69.5": 0.0443749945056689,
+      "KXHIGHLAX-26MAY20-B71.5": 0.06447000554073112,
+      "KXHIGHLAX-26MAY20-B73.5": 0.08571793783350784,
+      "KXHIGHLAX-26MAY20-B75.5": 0.10429922028020999,
+      "KXHIGHLAX-26MAY20-T76": 0.6415201321831268
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "event_ticker": "KXHIGHPHIL-26MAY20",
+  "series": "KXHIGHPHIL",
+  "target_date": "2026-05-20",
+  "forecasts": {
+    "ecmwf": 94.4,
+    "gfs": 94.3,
+    "nws": 95.0
+  },
+  "metar_current": 96.08000000000001,
+  "today_max": null,
+  "markets": [
+    {
+      "cap_strike": 94,
+      "floor_strike": 93,
+      "no_ask_dollars": "0.7500",
+      "strike_type": "between",
+      "ticker": "KXHIGHPHIL-26MAY20-B93.5",
+      "yes_ask_dollars": "0.2900",
+      "yes_bid_dollars": "0.2500"
+    },
+    {
+      "floor_strike": 100,
+      "no_ask_dollars": "1.0000",
+      "strike_type": "greater",
+      "ticker": "KXHIGHPHIL-26MAY20-T100",
+      "yes_ask_dollars": "0.0200",
+      "yes_bid_dollars": "0.0000"
+    },
+    {
+      "cap_strike": 100,
+      "floor_strike": 99,
+      "no_ask_dollars": "0.9600",
+      "strike_type": "between",
+      "ticker": "KXHIGHPHIL-26MAY20-B99.5",
+      "yes_ask_dollars": "0.0500",
+      "yes_bid_dollars": "0.0400"
+    },
+    {
+      "cap_strike": 93,
+      "no_ask_dollars": "0.9700",
+      "strike_type": "less",
+      "ticker": "KXHIGHPHIL-26MAY20-T93",
+      "yes_ask_dollars": "0.0500",
+      "yes_bid_dollars": "0.0300"
+    },
+    {
+      "cap_strike": 98,
+      "floor_strike": 97,
+      "no_ask_dollars": "0.7500",
+      "strike_type": "between",
+      "ticker": "KXHIGHPHIL-26MAY20-B97.5",
+      "yes_ask_dollars": "0.2600",
+      "yes_bid_dollars": "0.2500"
+    },
+    {
+      "cap_strike": 96,
+      "floor_strike": 95,
+      "no_ask_dollars": "0.5900",
+      "strike_type": "between",
+      "ticker": "KXHIGHPHIL-26MAY20-B95.5",
+      "yes_ask_dollars": "0.4400",
+      "yes_bid_dollars": "0.4100"
+    }
+  ],
+  "captured_at": 1779222853,
+  "expected": {
+    "mu": 95.75450000000001,
+    "sigma": 2.0237478982214054,
+    "mu_raw": 94.53450000000001,
+    "bias_applied": -1.22,
+    "truncation": null,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHPHIL-26MAY20-T93": 0.05390063428092556,
+      "KXHIGHPHIL-26MAY20-B93.5": 0.21376464709679688,
+      "KXHIGHPHIL-26MAY20-B95.5": 0.3760382447201939,
+      "KXHIGHPHIL-26MAY20-B97.5": 0.26884886937232777,
+      "KXHIGHPHIL-26MAY20-B99.5": 0.07793168375918624,
+      "KXHIGHPHIL-26MAY20-T100": 0.00951592077056962
+    }
+  }
+}

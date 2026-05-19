@@ -1,0 +1,83 @@
+{
+  "event_ticker": "KXHIGHDEN-26MAY19",
+  "series": "KXHIGHDEN",
+  "target_date": "2026-05-19",
+  "forecasts": {
+    "ecmwf": 49.9,
+    "gfs": 46.5,
+    "nws": 51.0
+  },
+  "metar_current": 46.04,
+  "today_max": 46.04,
+  "markets": [
+    {
+      "cap_strike": 46,
+      "floor_strike": 45,
+      "no_ask_dollars": "1.0000",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY19-B45.5",
+      "yes_ask_dollars": "0.0100",
+      "yes_bid_dollars": "0.0000"
+    },
+    {
+      "cap_strike": 45,
+      "no_ask_dollars": "1.0000",
+      "strike_type": "less",
+      "ticker": "KXHIGHDEN-26MAY19-T45",
+      "yes_ask_dollars": "0.0100",
+      "yes_bid_dollars": "0.0000"
+    },
+    {
+      "floor_strike": 52,
+      "no_ask_dollars": "0.9900",
+      "strike_type": "greater",
+      "ticker": "KXHIGHDEN-26MAY19-T52",
+      "yes_ask_dollars": "0.0200",
+      "yes_bid_dollars": "0.0100"
+    },
+    {
+      "cap_strike": 52,
+      "floor_strike": 51,
+      "no_ask_dollars": "0.9000",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY19-B51.5",
+      "yes_ask_dollars": "0.1500",
+      "yes_bid_dollars": "0.1000"
+    },
+    {
+      "cap_strike": 48,
+      "floor_strike": 47,
+      "no_ask_dollars": "0.6800",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY19-B47.5",
+      "yes_ask_dollars": "0.3600",
+      "yes_bid_dollars": "0.3200"
+    },
+    {
+      "cap_strike": 50,
+      "floor_strike": 49,
+      "no_ask_dollars": "0.5000",
+      "strike_type": "between",
+      "ticker": "KXHIGHDEN-26MAY19-B49.5",
+      "yes_ask_dollars": "0.6100",
+      "yes_bid_dollars": "0.5000"
+    }
+  ],
+  "captured_at": 1779222785,
+  "expected": {
+    "mu": 49.85,
+    "sigma": 2.7692758780751494,
+    "mu_raw": 49.04,
+    "bias_applied": -0.81,
+    "truncation": 45.54,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHDEN-26MAY19-T45": 0.0,
+      "KXHIGHDEN-26MAY19-B45.5": 0.05678186741968281,
+      "KXHIGHDEN-26MAY19-B47.5": 0.21246607609561888,
+      "KXHIGHDEN-26MAY19-B49.5": 0.29763320282347544,
+      "KXHIGHDEN-26MAY19-B51.5": 0.2530470246791341,
+      "KXHIGHDEN-26MAY19-T52": 0.1800718289820888
+    }
+  }
+}

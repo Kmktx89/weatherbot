@@ -1,0 +1,89 @@
+{
+  "event_ticker": "KXHIGHAUS-26MAY20",
+  "series": "KXHIGHAUS",
+  "target_date": "2026-05-20",
+  "forecasts": {
+    "ecmwf": 78.7,
+    "gfs": 85.4,
+    "nws": 84.0
+  },
+  "metar_current": 91.03999999999999,
+  "today_max": null,
+  "markets": [
+    {
+      "cap_strike": 83,
+      "floor_strike": 82,
+      "no_ask_dollars": "0.7100",
+      "strike_type": "between",
+      "subtitle": "82\u00b0 to 83\u00b0",
+      "ticker": "KXHIGHAUS-26MAY20-B82.5",
+      "yes_ask_dollars": "0.3100",
+      "yes_bid_dollars": "0.2900"
+    },
+    {
+      "cap_strike": 89,
+      "floor_strike": 88,
+      "no_ask_dollars": "0.9700",
+      "strike_type": "between",
+      "subtitle": "88\u00b0 to 89\u00b0",
+      "ticker": "KXHIGHAUS-26MAY20-B88.5",
+      "yes_ask_dollars": "0.0500",
+      "yes_bid_dollars": "0.0300"
+    },
+    {
+      "cap_strike": 82,
+      "no_ask_dollars": "0.6700",
+      "strike_type": "less",
+      "subtitle": "81\u00b0 or below",
+      "ticker": "KXHIGHAUS-26MAY20-T82",
+      "yes_ask_dollars": "0.3400",
+      "yes_bid_dollars": "0.3300"
+    },
+    {
+      "floor_strike": 89,
+      "no_ask_dollars": "1.0000",
+      "strike_type": "greater",
+      "subtitle": "90\u00b0 or above",
+      "ticker": "KXHIGHAUS-26MAY20-T89",
+      "yes_ask_dollars": "0.0100",
+      "yes_bid_dollars": "0.0000"
+    },
+    {
+      "cap_strike": 85,
+      "floor_strike": 84,
+      "no_ask_dollars": "0.7500",
+      "strike_type": "between",
+      "subtitle": "84\u00b0 to 85\u00b0",
+      "ticker": "KXHIGHAUS-26MAY20-B84.5",
+      "yes_ask_dollars": "0.2600",
+      "yes_bid_dollars": "0.2500"
+    },
+    {
+      "cap_strike": 87,
+      "floor_strike": 86,
+      "no_ask_dollars": "0.9200",
+      "strike_type": "between",
+      "subtitle": "86\u00b0 to 87\u00b0",
+      "ticker": "KXHIGHAUS-26MAY20-B86.5",
+      "yes_ask_dollars": "0.1000",
+      "yes_bid_dollars": "0.0800"
+    }
+  ],
+  "captured_at": 1779222853,
+  "expected": {
+    "mu": 85.383,
+    "sigma": 3.5109352979892225,
+    "mu_raw": 83.573,
+    "bias_applied": -1.81,
+    "truncation": null,
+    "today_max_active": false,
+    "probs": {
+      "KXHIGHAUS-26MAY20-T82": 0.13436908105992662,
+      "KXHIGHAUS-26MAY20-B82.5": 0.16149813026007176,
+      "KXHIGHAUS-26MAY20-B84.5": 0.2174248619141309,
+      "KXHIGHAUS-26MAY20-B86.5": 0.21344467803704137,
+      "KXHIGHAUS-26MAY20-B88.5": 0.1527895388555417,
+      "KXHIGHAUS-26MAY20-T89": 0.12047370987328765
+    }
+  }
+}
