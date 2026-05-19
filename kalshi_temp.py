@@ -1455,25 +1455,30 @@ def backtest_one_event(event_ticker, lead_hours, threshold):
     if not sources:
         return {"event": event_ticker, "skipped": "no_historical_forecast"}
 
-    mu_raw = weighted_mean(series, ecmwf, gfs)
-    if mu_raw is None:
-        mu_raw = sum(sources) / len(sources)
-    mu = mu_raw - BIAS.get(series, 0.0)
-    spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
-    sigma = math.sqrt(BASE_SIGMA ** 2 + spread ** 2)
-
-    ranked = []
-    for m in markets:
-        p = bucket_probability(m, mu, sigma)
-        if p is not None:
-            ranked.append((m, p))
-    if not ranked:
-        return {"event": event_ticker, "skipped": "no_probability"}
-
     try:
         close_dt = datetime.fromisoformat(markets[0]["close_time"].replace("Z", "+00:00"))
     except Exception:
         return {"event": event_ticker, "skipped": "no_close_time"}
+
+    from model import ModelInputs, compute
+    from lab.configs import BACKTEST_TODAY
+    inputs = ModelInputs(
+        series=series, event_ticker=event_ticker, target_date=target_date,
+        forecasts={"ecmwf": ecmwf, "gfs": gfs, "nws": None},
+        metar_current=None, today_max=None,
+        markets=markets,
+        decision_ts=int(close_dt.timestamp() - lead_hours * 3600),
+        fetched_at=0,
+    )
+    out = compute(inputs, BACKTEST_TODAY)
+    if out.mu is None:
+        return {"event": event_ticker, "skipped": "no_probability"}
+    mu, sigma = out.mu, out.sigma
+
+    ranked = [(m, out.probs[m["ticker"]]) for m in markets if m["ticker"] in out.probs]
+    if not ranked:
+        return {"event": event_ticker, "skipped": "no_probability"}
+
     decision_ts = int(close_dt.timestamp() - lead_hours * 3600)
     winner_ticker = winner["ticker"]
 
