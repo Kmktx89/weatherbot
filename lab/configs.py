@@ -1,6 +1,7 @@
 """Named ModelConfig instances. LIVE_TODAY reproduces current production
 exactly; BACKTEST_TODAY reproduces the current cmd_backtest formula. New
 variants are added here as additional named constants."""
+from dataclasses import replace
 from types import MappingProxyType
 
 import kalshi_temp as _kt
@@ -48,7 +49,39 @@ BACKTEST_TODAY = ModelConfig(
 )
 
 
-_BY_NAME = {c.name: c for c in (LIVE_TODAY, BACKTEST_TODAY)}
+LIVE_MINUS_NWS = replace(
+    LIVE_TODAY,
+    name="live-minus-nws",
+    nws_blend=0.0,
+    sigma_sources=("ecmwf", "gfs"),
+)
+
+
+LIVE_MINUS_TRUNC = replace(
+    LIVE_TODAY,
+    name="live-minus-trunc",
+    today_max_mode="off",
+)
+
+
+LIVE_MINUS_PUSH = replace(
+    LIVE_TODAY,
+    name="live-minus-push",
+    today_max_mode="truncate",   # keep truncation, drop the +0.3 push
+)
+
+
+LIVE_AT_T24_STRICT = replace(
+    LIVE_TODAY,
+    name="live-at-t24-strict",
+    decision_lead_hours=24.0,
+)
+
+
+_BY_NAME = {c.name: c for c in (
+    LIVE_TODAY, BACKTEST_TODAY,
+    LIVE_MINUS_NWS, LIVE_MINUS_TRUNC, LIVE_MINUS_PUSH, LIVE_AT_T24_STRICT,
+)}
 
 
 def get(name: str) -> ModelConfig:
