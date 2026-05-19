@@ -6,6 +6,7 @@ import sys
 from . import configs as _configs
 from .compare import compare as run_compare
 from .decompose import decompose as run_decompose
+from .refit_bias import refit as run_refit
 from .replay import replay_many, summarize
 
 
@@ -84,6 +85,20 @@ def cmd_decompose(args):
         print(f"  {v['variant']:<22}  attrib ${v['pnl_delta_attrib']:+.2f}   flips {v['decision_flips']}")
 
 
+def cmd_refit_bias(args):
+    cfg = _configs.get(args.config)
+    events = _resolve_events(args)
+    table = run_refit(events, cfg)
+    if args.json:
+        print(json.dumps(table, indent=2))
+        return
+    print(f"# refit-bias output for config={cfg.name}, events={len(events)}")
+    print("BIAS = {")
+    for s, row in sorted(table.items()):
+        print(f"    {s!r:<14}: {row['bias']:+6.2f},  # n={row['n']}, sd={row['sd']:.2f}")
+    print("}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -114,6 +129,14 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--events")
     dp.add_argument("--json", action="store_true")
     dp.set_defaults(func=cmd_decompose)
+
+    rb = sub.add_parser("refit-bias", help="refit BIAS table for a config")
+    rb.add_argument("--config", required=True)
+    rb.add_argument("--days", type=int, default=60)
+    rb.add_argument("--series")
+    rb.add_argument("--events")
+    rb.add_argument("--json", action="store_true")
+    rb.set_defaults(func=cmd_refit_bias)
 
     return p
 
