@@ -172,9 +172,9 @@ def cmd_sweep(args):
     best_y = best_by_pnl(report, "yes")
     best_n = best_by_pnl(report, "no")
     if best_y:
-        print(f"  Best YES PnL: {args.param}={best_y[0]} → ${best_y[1]['yes']['total_pnl']:+.2f}")
+        print(f"  Best YES PnL: {args.param}={best_y[0]} -> ${best_y[1]['yes']['total_pnl']:+.2f}")
     if best_n:
-        print(f"  Best NO  PnL: {args.param}={best_n[0]} → ${best_n[1]['no']['total_pnl']:+.2f}")
+        print(f"  Best NO  PnL: {args.param}={best_n[0]} -> ${best_n[1]['no']['total_pnl']:+.2f}")
     if args.by_series:
         print()
         print(f"  Per-series YES PnL by {args.param}:")
