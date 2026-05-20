@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy this file to pushover_config.json and fill in real values. The real file is gitignored. user_key from https://pushover.net dashboard; api_token from a new application registered at https://pushover.net/apps/build.",
+  "user_key": "REPLACE_WITH_YOUR_USER_KEY",
+  "api_token": "REPLACE_WITH_YOUR_APPLICATION_TOKEN"
+}

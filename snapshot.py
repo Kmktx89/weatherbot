@@ -81,7 +81,7 @@ def main() -> int:
         print(f"[snapshot] fetch_kalshi_events: {e}", file=sys.stderr)
         return 0
 
-    n_written = 0
+    rows: list[dict] = []
     for ev, markets in events:
         et = ev.get("event_ticker", "?")
         try:
@@ -90,12 +90,19 @@ def main() -> int:
                 continue
             with open(LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
-            n_written += 1
+            rows.append(row)
         except Exception as e:
             print(f"[snapshot] {et}: {e}", file=sys.stderr)
 
-    print(f"[snapshot] wrote {n_written} rows to {LOG_PATH} at {ts.isoformat()}",
+    print(f"[snapshot] wrote {len(rows)} rows to {LOG_PATH} at {ts.isoformat()}",
           file=sys.stderr)
+
+    try:
+        from alerts import send_t24_alerts
+        send_t24_alerts(rows)
+    except Exception as e:
+        print(f"[alerts] {e}", file=sys.stderr)
+
     return 0
 
 
