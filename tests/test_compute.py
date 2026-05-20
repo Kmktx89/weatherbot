@@ -175,3 +175,30 @@ def test_compute_partial_source_with_real_bias_table():
     # mu_raw 75.0, bias -0.44, mu = 75.0 - (-0.44) = 75.44
     assert out.mu == pytest.approx(75.44, abs=1e-9)
     assert out.bias_applied == -0.44
+
+
+def test_compute_ignores_metar_current():
+    """metar_current is informational only; compute() must not read it.
+
+    If this fails, the today/tomorrow separation breaks: a tomorrow-event
+    snapshot carries today's current METAR temperature in its inputs, and any
+    leak would pull mu toward today's temperature on a forecast that resolves
+    tomorrow.
+    """
+    cfg = _basic_cfg(
+        nws_blend=0.3,
+        sigma_sources=("ecmwf", "gfs", "nws"),
+        bias_table={"KXHIGHNY": -0.44},
+        today_max_mode="both",
+    )
+    inputs_kwargs = dict(forecasts={"ecmwf": 72.0, "gfs": 70.0, "nws": 71.5})
+    baseline = compute(_basic_inputs(metar_current=None, **inputs_kwargs), cfg)
+
+    for metar in (-50.0, 0.0, 70.0, 999.0):
+        out = compute(_basic_inputs(metar_current=metar, **inputs_kwargs), cfg)
+        assert out.mu == baseline.mu, f"mu changed at metar_current={metar}"
+        assert out.sigma == baseline.sigma, f"sigma changed at metar_current={metar}"
+        assert out.mu_raw == baseline.mu_raw, f"mu_raw changed at metar_current={metar}"
+        assert out.probs == baseline.probs, f"probs changed at metar_current={metar}"
+        assert out.truncation == baseline.truncation
+        assert out.today_max_active == baseline.today_max_active
