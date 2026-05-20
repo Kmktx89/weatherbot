@@ -44,7 +44,12 @@ NWS = "https://api.weather.gov"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 
 USER_AGENT = "kalshi-temp/0.1 (weatherbot fork)"
-BASE_SIGMA = 2.0  # °F floor on forecast uncertainty
+BASE_SIGMA = 1.0  # °F floor on forecast uncertainty
+# Graduated 2026-05-19 from 2.0 -> 1.0 based on the sigma sweep in
+# docs/superpowers/reports/2026-05-19-sigma-sweep-and-reading-guide.md:
+# +20% total backtest PnL, NO win rate 70 -> 84, calibration gaps shrink
+# on both sides. Per-city forecast sd averages ~1.55; 2.0 overstated
+# uncertainty. LIVE_TODAY in lab/configs.py inherits this via _kt.BASE_SIGMA.
 CACHE_TTL = 300   # seconds
 NWS_LOG_PATH = "nws_log.jsonl"  # forward log for future NWS bias audit
 

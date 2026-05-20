@@ -1,0 +1,139 @@
+# Weatherbot model notes — consult before placing a bet
+
+**Last updated:** 2026-05-19 · **Current config:** `LIVE_TODAY` with `BASE_SIGMA=1.0`
+
+This is the canonical quick-reference. Open it next to the dashboard.
+For the full analysis behind any rule below, see the linked report.
+
+---
+
+## Current model state
+
+| Knob | Value | Notes |
+|---|---|---|
+| `BASE_SIGMA` | **1.0 °F** | Graduated from 2.0 on 2026-05-19. +20% backtest PnL. |
+| `nws_blend` | 0.3 | 30% NWS overlay on top of ECMWF/GFS blend |
+| `today_max_mode` | `both` | Both raises mu AND truncates CDF when today_max binds |
+| `today_max_headroom` | 0.5 °F | METAR-rounding allowance under TODAY-MAX |
+| `today_max_push` | 0.3 °F | Mu push above truncation when today_max binds |
+| `sanity_no_yes_ask_min` | 0.85 | Skip NO bet if market is this confident YES |
+| `sanity_no_prob_max` | 0.40 | …and model thinks the bucket is this unlikely |
+| `decision_lead_hours` | 24.0 | Used by `cmd_backtest` only; live dashboard recomputes per refresh |
+
+Per-city `BIAS` and `SOURCE_WEIGHTS` in `kalshi_temp.py`. Were refit 2026-05-19, deltas within 0.3 °F of prior values — already correct for the backtest formula.
+
+---
+
+## How to read a YES pick (highest-probability bucket)
+
+The dashboard shows the model's probability mass for that bucket. **It is NOT the model's confidence that the prediction is right.** Buckets are narrow (~1 °F), so even an accurate forecast puts only 30-60% mass on the peak.
+
+**Calibrated adjustment table:**
+
+| Printed prob | What to actually believe |
+|---|---|
+| ≥ 80% | Take at face value (model is well-calibrated at the top) |
+| 60-80% | Add ~5 pp |
+| 40-60% | Add ~8-10 pp |
+| < 40% | Add ~10-15 pp |
+
+**Decision:** True EV = (calibrated prob − `yes_ask`). Take if ≥ 5¢, skip if < 5¢.
+
+YES side is consistently a touch underconfident even after the σ=1.0 graduation. Source: `2026-05-19-prediction-calibration.md`.
+
+---
+
+## How to read a NO pick (best-EV-NO bucket)
+
+The number shown is `1 − P_yes` for the bucket — i.e. the model's confidence that the bucket WON'T win. NO interpretation is **asymmetric** from YES: different selection rule, different "win" definition, different miscalibration profile.
+
+**Calibrated adjustment table:**
+
+| Printed prob | What to actually believe | Action |
+|---|---|---|
+| ≥ 90% | Subtract ~3 pp | Take if calibrated EV ≥ 5¢ |
+| 75-90% | Subtract ~3-5 pp | Take if calibrated EV ≥ 5¢ |
+| **60-75%** | — | **SKIP. Danger zone** — historically 30 pp overconfident in this bin |
+| < 60% | — | **SKIP. Model unreliable here** |
+
+**Decision:** True EV = (calibrated prob − `no_ask`). Take if ≥ 5¢, skip if < 5¢.
+
+NO calibration improves as you approach close (almost perfect at T-36h, badly overconfident at T-12h). The σ=1.0 graduation tightened the residual gap but didn't eliminate it — danger zone still applies.
+
+---
+
+## Timing — when to place positions
+
+| Window | What it gives you | Caveats |
+|---|---|---|
+| **T-36h to T-30h** (noon-1pm local day before resolution) | **Best price entry** (markets thinly traded → wider spreads → better fills for the model's edge). NO calibration is best here. | Volume is 3% of peak — small bets only, larger size may slip |
+| T-24h | Default; balanced liquidity and edge | Status quo |
+| T-12h | Most liquidity, market is fully formed | NO miscalibration blows out to −26 pp; **skip NO bets entirely** in this window unless printed prob ≥ 90% |
+| T-1h | Peak open interest | Edge is mostly gone; market has converged |
+
+**Important:** the model's PROBABILITY output doesn't change with lead time in the lab (Open-Meteo archive returns frozen historical forecasts). What changes is market prices. Once shadow-mode data accumulates we'll be able to measure how live forecasts evolve. Source: `2026-05-19-leadtime-sweep.md`.
+
+---
+
+## Hard skip rules (override any "good" EV)
+
+| Condition | Why |
+|---|---|
+| NO bet with printed prob between 60% and 75% | Danger zone — 30 pp overconfident in this bin |
+| NO bet with `yes_ask ≥ 0.85` AND model prob ≤ 0.40 | Sanity cap — market knows something the model doesn't |
+| `yes_bid` and `yes_ask` more than 5¢ apart | Spread too wide; edge gets eaten by execution |
+| Within 1h of close, sitting at laptop | Stale read; today_max may have just fired and shifted mu |
+| Settled bucket has yes_bid ≥ 0.95 on dashboard | Event resolved; do not bet |
+
+---
+
+## Sizing
+
+Quarter-Kelly:
+
+```
+bet_size = bankroll × 0.25 × (calibrated_true_EV / entry_price)
+```
+
+Where entry_price is `yes_ask` for YES bets, `no_ask = 1 − yes_bid` for NO bets.
+
+Example: True EV 10¢ on a 30¢ YES → 8.3% of bankroll. True EV 10¢ on a 80¢ NO → 3.1% of bankroll.
+
+The lab's PnL is at per-$1-unit notional and does not reflect Kelly sizing. Multiply lab PnL by `bankroll × 0.05` for a rough dollar conversion at quarter-Kelly.
+
+---
+
+## Quick mental model of how the model works
+
+1. ECMWF and GFS historical forecasts blended per-city with `SOURCE_WEIGHTS`
+2. Plus a 30% overlay from NWS (only in live, not in historical replay)
+3. Minus a per-city `BIAS` correction (fit from 60-day error history)
+4. → `mu` (the model's expected temperature)
+5. `sigma` = √(BASE_SIGMA² + spread²) where BASE_SIGMA=1.0 and spread = pstdev of sources
+6. Each bucket gets `P = N(upper; mu, sigma) − N(lower; mu, sigma)`
+7. If TODAY-MAX has been observed mid-afternoon, mu may be pushed up and the CDF truncated below TODAY-MAX − 0.5 °F (today_max_mode="both")
+8. YES bet picks argmax(P_yes); NO bet picks argmax(EV_NO) with sanity cap
+
+---
+
+## Reports referenced
+
+All in `docs/superpowers/reports/`:
+
+- **2026-05-19-divergence-attribution.md** — why historical replay can't see the live-vs-backtest gap; recommends forward shadow trial
+- **2026-05-19-leadtime-sweep.md** — T-36h price-entry advantage (+22% YES PnL vs T-24h), volume profile by lead time
+- **2026-05-19-prediction-calibration.md** — how to read probabilities; YES underconfidence vs NO overconfidence framework
+- **2026-05-19-sigma-sweep-and-reading-guide.md** — the σ=1.0 graduation rationale and reading rules (deeper version of this page)
+
+Plus the spec at `docs/superpowers/specs/2026-05-19-weatherbot-model-lab-design.md` and the plan at `docs/superpowers/plans/2026-05-19-weatherbot-model-lab.md`.
+
+---
+
+## What's still TODO
+
+- **Forward-shadow validate σ=1.0** for two weeks. Shadow runner is wired; tail `shadow_picks.jsonl` and run `lab shadow-summary --config live-today --days 14` after enough data accrues.
+- **Per-city σ refit** — DEN has sd=2.06 °F; might want city-specific σ. Sweep later.
+- **Live-formula BIAS refit** — current BIAS is calibrated for the no-NWS replay formula. With NWS overlay added live, residual bias may exist. Refit after 30 days of `nws_log.jsonl`.
+- **Closer-to-Platt-scaling calibration** — the YES gap is +8.8 pp at σ=1.0; not zero. A learned monotonic recalibration could close most of it. Eventually.
+- **Lower the today_max_push** — `today_max_mode="both"` double-counts TODAY-MAX (raises mu AND truncates). Try `"truncate"` (truncation only) in a follow-up sweep.
+- **Drop the `cache warm` CLI stub** or implement it.
