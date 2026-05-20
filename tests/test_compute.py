@@ -104,3 +104,74 @@ def test_compute_carries_config_name_and_code_version():
     assert out.config_name == "my-config"
     from model import CODE_VERSION
     assert out.code_version == CODE_VERSION
+
+
+# --- partial-source fallback paths ----------------------------------------
+# All ten baseline fixtures (captured 2026-05-19) have ECMWF + GFS + NWS
+# present, so they never exercise the _blend_sources fallback cascade.
+# These unit tests pin the math on the three branches that survive when
+# inputs are partial. Hand-derived values, so any drift in blend / sigma
+# logic flips them.
+
+def test_compute_gfs_only_renormalises_weighted_mean():
+    """ECMWF=None, GFS=present: weighted_mean returns GFS unchanged
+    (parts=[(75.0, 0.6)], total_w=0.6, 75*0.6/0.6 = 75.0)."""
+    inputs = _basic_inputs(forecasts={"ecmwf": None, "gfs": 75.0, "nws": None})
+    cfg = _basic_cfg(
+        source_weights={"KXHIGHNY": {"ecmwf": 0.40, "gfs": 0.60}},
+        sigma_sources=("ecmwf", "gfs", "nws"),
+    )
+    out = compute(inputs, cfg)
+    assert out.mu_raw == pytest.approx(75.0, abs=1e-9)
+    assert out.mu == pytest.approx(75.0, abs=1e-9)
+    # sigma_sources = (ec, gfs, nws); only gfs present -> pstdev of single
+    # element is 0; sigma = sqrt(BASE_SIGMA^2 + 0) = BASE_SIGMA = 2.0.
+    assert out.sigma == pytest.approx(2.0, abs=1e-9)
+
+
+def test_compute_ecmwf_only_with_nws_overlay():
+    """ECMWF=present, GFS=None, NWS=present: weighted_mean returns ECMWF,
+    then NWS overlay at 30% pulls mu_raw toward NWS."""
+    inputs = _basic_inputs(forecasts={"ecmwf": 70.0, "gfs": None, "nws": 72.0})
+    cfg = _basic_cfg(
+        source_weights={"KXHIGHNY": {"ecmwf": 0.10, "gfs": 0.90}},
+        nws_blend=0.3,
+        sigma_sources=("ecmwf", "gfs", "nws"),
+    )
+    out = compute(inputs, cfg)
+    # weighted_mean -> 70.0, then 0.7*70 + 0.3*72 = 70.6
+    assert out.mu_raw == pytest.approx(70.6, abs=1e-9)
+    # sigma_sources present from (ec, gfs, nws) = [70.0, 72.0]; pstdev = 1.0
+    # sigma = sqrt(BASE_SIGMA^2 + 1.0^2) = sqrt(5) ~= 2.2361
+    assert out.sigma == pytest.approx(math.sqrt(5.0), abs=1e-9)
+
+
+def test_compute_nws_only_takes_simple_mean_fallback():
+    """ECMWF=None, GFS=None, NWS=present: weighted_mean returns None
+    (no values in source_weights are present); fallback to simple mean
+    of all present forecasts ([NWS]) then NWS overlay (no-op since
+    blend == NWS already)."""
+    inputs = _basic_inputs(forecasts={"ecmwf": None, "gfs": None, "nws": 82.0})
+    cfg = _basic_cfg(
+        source_weights={"KXHIGHNY": {"ecmwf": 0.40, "gfs": 0.60}},
+        nws_blend=0.3,
+        sigma_sources=("ecmwf", "gfs", "nws"),
+    )
+    out = compute(inputs, cfg)
+    # fallback mean of [82.0] = 82.0; NWS overlay: 0.7*82 + 0.3*82 = 82.0
+    assert out.mu_raw == pytest.approx(82.0, abs=1e-9)
+    # sigma_sources present = [82.0]; pstdev single = 0; sigma = 2.0
+    assert out.sigma == pytest.approx(2.0, abs=1e-9)
+
+
+def test_compute_partial_source_with_real_bias_table():
+    """Sanity check that bias_table still applies on a partial-source path."""
+    inputs = _basic_inputs(forecasts={"ecmwf": None, "gfs": 75.0, "nws": None})
+    cfg = _basic_cfg(
+        bias_table={"KXHIGHNY": -0.44},
+        source_weights={"KXHIGHNY": {"ecmwf": 0.40, "gfs": 0.60}},
+    )
+    out = compute(inputs, cfg)
+    # mu_raw 75.0, bias -0.44, mu = 75.0 - (-0.44) = 75.44
+    assert out.mu == pytest.approx(75.44, abs=1e-9)
+    assert out.bias_applied == -0.44
