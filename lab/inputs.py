@@ -37,20 +37,37 @@ def fetch_historical_open_meteo(lat: float, lon: float, target_date: str,
 
 def fetch_yes_ask_at(series: str, ticker: str, decision_ts: int,
                       cache: DataCache) -> float | None:
-    """Cached yes_ask at decision_ts for a settled event.
+    """Cached yes_ask at decision_ts for a settled event."""
+    ask, _bid = fetch_bid_ask_at(series, ticker, decision_ts, cache)
+    return ask
 
-    The underlying Kalshi candle endpoint is deterministic for past timestamps,
-    so a cache hit is always correct. None TTL because settled-event candles
-    are immutable.
+
+def fetch_bid_ask_at(series: str, ticker: str, decision_ts: int,
+                      cache: DataCache) -> tuple[float | None, float | None]:
+    """Cached (yes_ask, yes_bid) at decision_ts for a settled event.
+
+    Underlying Kalshi candle endpoint is deterministic for past timestamps,
+    so cache hits are always correct. None TTL because settled-event candles
+    are immutable. One cache entry serves both ask and bid.
     """
-    key = f"kalshi_candle_yes_ask:{series}:{ticker}:{decision_ts}"
+    key = f"kalshi_candle_bid_ask:{series}:{ticker}:{decision_ts}"
     cached = cache.get(key, ttl=TTL["kalshi_candle_yes_ask"])
     if cached is not None:
-        return cached.get("value")
-    v = kt.yes_ask_at(series, ticker, decision_ts)
-    cache.set(key, {"value": v}, source="kalshi_candle_yes_ask",
-              target_date=None)
-    return v
+        return cached.get("ask"), cached.get("bid")
+    bars = kt.fetch_kalshi_candlestick(series, ticker,
+                                        decision_ts - 6 * 3600,
+                                        decision_ts + 600, 60)
+    best = None
+    for b in bars:
+        if b["end_period_ts"] <= decision_ts + 600:
+            best = b
+    ask = bid = None
+    if best:
+        ask = kt.to_float((best.get("yes_ask") or {}).get("close_dollars"))
+        bid = kt.to_float((best.get("yes_bid") or {}).get("close_dollars"))
+    cache.set(key, {"ask": ask, "bid": bid},
+              source="kalshi_candle_bid_ask", target_date=None)
+    return ask, bid
 
 
 def fetch_event_markets(event_ticker: str, cache: DataCache) -> list[dict]:

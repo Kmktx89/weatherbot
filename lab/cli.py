@@ -8,8 +8,9 @@ from .compare import compare as run_compare
 from .data_cache import default as default_cache
 from .decompose import decompose as run_decompose
 from .refit_bias import refit as run_refit
-from .replay import replay_many, summarize
+from .replay import replay_many, summarize, summarize_both
 from .shadow_summary import summarize as run_shadow_summary
+from .sweep import sweep as run_sweep, best_by_pnl
 
 
 _DEFAULT_VARIANTS = ["live-minus-nws", "live-minus-trunc", "live-minus-push"]
@@ -30,6 +31,14 @@ def _resolve_events(args) -> list[str]:
     return tickers
 
 
+def _fmt_side(label: str, s: dict) -> str:
+    if not s["bets"]:
+        return f"  {label}: no bets"
+    return (f"  {label}: bets {s['bets']:>3}  WR {s['win_rate']*100:>5.1f}%  "
+            f"PnL ${s['total_pnl']:+7.2f}  avg ${s['avg_pnl']:+.3f}  "
+            f"DD ${s['max_drawdown']:.2f}")
+
+
 def cmd_replay(args):
     cfg = _configs.get(args.config)
     events = _resolve_events(args)
@@ -37,18 +46,17 @@ def cmd_replay(args):
         sys.exit("no events resolved — pass --events, --series, or use the default all-series with --days")
     records = replay_many(events, cfg)
     if args.json:
+        import dataclasses
         print(json.dumps({
             "config": cfg.name, "n_events": len(events),
-            "summary": summarize(records),
-            "records": [r.__dict__ for r in records],
+            **summarize_both(records),
+            "records": [dataclasses.asdict(r) for r in records],
         }, indent=2))
         return
-    s = summarize(records)
-    print(f"Config:  {cfg.name}")
-    print(f"Events:  {len(events)}   Bets: {s['bets']}   Wins: {s['wins']}")
-    if s["bets"]:
-        print(f"WinRate: {s['win_rate']*100:.1f}%   Total PnL: ${s['total_pnl']:+.2f}   "
-              f"Avg PnL: ${s['avg_pnl']:+.3f}   Max DD: ${s['max_drawdown']:.2f}")
+    both = summarize_both(records)
+    print(f"Config:  {cfg.name}   Events:  {len(events)}")
+    print(_fmt_side("YES (high temp)", both["yes"]))
+    print(_fmt_side("NO  (best EV) ", both["no"]))
 
 
 def cmd_compare(args):
@@ -63,11 +71,15 @@ def cmd_compare(args):
         print(json.dumps(dataclasses.asdict(result), indent=2))
         return
     print(f"A: {result.cfg_a}   B: {result.cfg_b}   Events: {len(events)}")
-    print(f"  A: bets {result.summary_a['bets']}  WR {result.summary_a['win_rate']*100:.1f}%  PnL ${result.summary_a['total_pnl']:+.2f}  DD ${result.summary_a['max_drawdown']:.2f}")
-    print(f"  B: bets {result.summary_b['bets']}  WR {result.summary_b['win_rate']*100:.1f}%  PnL ${result.summary_b['total_pnl']:+.2f}  DD ${result.summary_b['max_drawdown']:.2f}")
-    lo, hi = result.pnl_delta_ci
-    print(f"  PnL delta (B - A): ${result.pnl_delta:+.2f}   95% CI [${lo:+.2f}, ${hi:+.2f}]")
-    print(f"  Agreement: {result.agreement_rate*100:.1f}%   Decision flips: {len(result.decision_flips)}")
+    for side_name, side in (("YES", result.yes), ("NO ", result.no)):
+        print(f"--- {side_name} side ---")
+        print(_fmt_side("A", side.summary_a))
+        print(_fmt_side("B", side.summary_b))
+        lo, hi = side.pnl_delta_ci
+        print(f"  PnL delta (B - A): ${side.pnl_delta:+.2f}   "
+              f"95% CI [${lo:+.2f}, ${hi:+.2f}]")
+        print(f"  Agreement: {side.agreement_rate*100:.1f}%   "
+              f"Decision flips: {len(side.decision_flips)}")
 
 
 def cmd_decompose(args):
@@ -82,9 +94,14 @@ def cmd_decompose(args):
     if args.json:
         print(json.dumps(result, indent=2))
         return
-    print(f"Decomposing {baseline.name} vs {len(variants)} variants over {len(events)} events")
+    print(f"Decomposing {baseline.name} vs {len(variants)} variants "
+          f"over {len(events)} events")
+    print(f"  {'variant':<22}  {'YES attrib':>11}  {'flips':>5}  "
+          f"{'NO attrib':>10}  {'flips':>5}")
     for v in result["variants"]:
-        print(f"  {v['variant']:<22}  attrib ${v['pnl_delta_attrib']:+.2f}   flips {v['decision_flips']}")
+        print(f"  {v['variant']:<22}  "
+              f"${v['yes']['pnl_delta_attrib']:+8.2f}   {v['yes']['decision_flips']:>5}  "
+              f"${v['no']['pnl_delta_attrib']:+8.2f}   {v['no']['decision_flips']:>5}")
 
 
 def cmd_refit_bias(args):
@@ -133,6 +150,46 @@ def cmd_shadow_summary(args):
         print(f"  Skips: " + ", ".join(f"{n}× {k}" for k, n in s["skips"].items()))
 
 
+def cmd_sweep(args):
+    base = _configs.get(args.config)
+    events = _resolve_events(args)
+    if not events:
+        sys.exit("no events resolved")
+    values = [v.strip() for v in args.values.split(",") if v.strip()]
+    report = run_sweep(events, base, args.param, values, by_series=args.by_series)
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+        return
+    print(f"Sweep:   base={base.name}   param={args.param}   "
+          f"events={report['n_events']}")
+    print(f"  {'value':>10}  {'YES bets':>8}  {'YES WR':>7}  {'YES PnL':>9}  "
+          f"{'NO bets':>7}  {'NO WR':>7}  {'NO PnL':>9}")
+    for v_str, entry in report["values"].items():
+        y = entry["yes"]; n = entry["no"]
+        print(f"  {v_str:>10}  "
+              f"{y['bets']:>8}  {y['win_rate']*100:>6.1f}%  ${y['total_pnl']:+7.2f}  "
+              f"{n['bets']:>7}  {n['win_rate']*100:>6.1f}%  ${n['total_pnl']:+7.2f}")
+    best_y = best_by_pnl(report, "yes")
+    best_n = best_by_pnl(report, "no")
+    if best_y:
+        print(f"  Best YES PnL: {args.param}={best_y[0]} → ${best_y[1]['yes']['total_pnl']:+.2f}")
+    if best_n:
+        print(f"  Best NO  PnL: {args.param}={best_n[0]} → ${best_n[1]['no']['total_pnl']:+.2f}")
+    if args.by_series:
+        print()
+        print(f"  Per-series YES PnL by {args.param}:")
+        series = sorted({s for entry in report["values"].values()
+                          for s in entry["yes_by_series"].keys()})
+        header = f"  {'series':<14}" + "".join(f" {v:>10}" for v in report["values"])
+        print(header)
+        for s in series:
+            row = f"  {s:<14}"
+            for v_str, entry in report["values"].items():
+                pnl = entry["yes_by_series"].get(s, {}).get("total_pnl", 0.0)
+                row += f"  ${pnl:>+8.2f}"
+            print(row)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description="weatherbot model lab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -145,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--json", action="store_true")
     pr.set_defaults(func=cmd_replay)
 
-    cp = sub.add_parser("compare", help="A/B between two configs")
+    cp = sub.add_parser("compare", help="A/B between two configs (YES + NO)")
     cp.add_argument("cfg_a")
     cp.add_argument("cfg_b")
     cp.add_argument("--days", type=int, default=30)
@@ -155,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--json", action="store_true")
     cp.set_defaults(func=cmd_compare)
 
-    dp = sub.add_parser("decompose", help="prob/PnL attribution across variants")
+    dp = sub.add_parser("decompose", help="PnL attribution across variants (YES + NO)")
     dp.add_argument("--against", default="live-today")
     dp.add_argument("--variants", help="comma-separated names; default = minus-nws,minus-trunc,minus-push")
     dp.add_argument("--days", type=int, default=30)
@@ -183,6 +240,22 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--days", type=int, default=14)
     ss.add_argument("--json", action="store_true")
     ss.set_defaults(func=cmd_shadow_summary)
+
+    sw = sub.add_parser("sweep", help="sweep a ModelConfig parameter (YES + NO)")
+    sw.add_argument("--config", default="live-today",
+                    help="base config to vary (default live-today)")
+    sw.add_argument("--param", required=True,
+                    help="ModelConfig field to sweep (e.g. decision_lead_hours, "
+                         "base_sigma, today_max_headroom, today_max_push, nws_blend)")
+    sw.add_argument("--values", required=True,
+                    help="comma-separated values, e.g. '12,18,24,36,48'")
+    sw.add_argument("--days", type=int, default=60)
+    sw.add_argument("--series")
+    sw.add_argument("--events")
+    sw.add_argument("--by-series", action="store_true",
+                    help="emit per-series PnL grid")
+    sw.add_argument("--json", action="store_true")
+    sw.set_defaults(func=cmd_sweep)
 
     return p
 
