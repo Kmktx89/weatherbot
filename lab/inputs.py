@@ -20,6 +20,7 @@ TTL = {
     "nws": 300,
     "metar_hist": None,
     "kalshi_event_markets": 60,
+    "kalshi_candle_yes_ask": None,   # settled-event candles are immutable
 }
 
 
@@ -31,6 +32,24 @@ def fetch_historical_open_meteo(lat: float, lon: float, target_date: str,
         return cached.get("value")
     v = kt.fetch_open_meteo(lat, lon, target_date, model, historical=True)
     cache.set(key, {"value": v}, source="open_meteo:hist", target_date=target_date)
+    return v
+
+
+def fetch_yes_ask_at(series: str, ticker: str, decision_ts: int,
+                      cache: DataCache) -> float | None:
+    """Cached yes_ask at decision_ts for a settled event.
+
+    The underlying Kalshi candle endpoint is deterministic for past timestamps,
+    so a cache hit is always correct. None TTL because settled-event candles
+    are immutable.
+    """
+    key = f"kalshi_candle_yes_ask:{series}:{ticker}:{decision_ts}"
+    cached = cache.get(key, ttl=TTL["kalshi_candle_yes_ask"])
+    if cached is not None:
+        return cached.get("value")
+    v = kt.yes_ask_at(series, ticker, decision_ts)
+    cache.set(key, {"value": v}, source="kalshi_candle_yes_ask",
+              target_date=None)
     return v
 
 

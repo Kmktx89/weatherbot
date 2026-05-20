@@ -11,11 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
 
-import kalshi_temp as kt
-
 from model import ModelConfig, compute
 
-from .inputs import build_historical_inputs, winner_of
+from .data_cache import default as default_cache
+from .inputs import build_historical_inputs, fetch_yes_ask_at, winner_of
 
 
 @dataclass
@@ -32,11 +31,6 @@ class ReplayRecord:
     won: bool | None
     pnl: float | None
     skip: str | None
-
-
-def _kalshi_candle_yes_ask_at(series: str, ticker: str, decision_ts: int) -> float | None:
-    """Read yes_ask from the latest candle <= decision_ts."""
-    return kt.yes_ask_at(series, ticker, decision_ts)
 
 
 def replay_one(event_ticker: str, cfg: ModelConfig) -> ReplayRecord:
@@ -63,7 +57,7 @@ def replay_one(event_ticker: str, cfg: ModelConfig) -> ReplayRecord:
     pick_market = next((m for m in inputs.markets if m["ticker"] == pick_ticker), None)
     pick_bucket = (pick_market.get("subtitle") if pick_market else None) or "?"
 
-    yes_ask = _kalshi_candle_yes_ask_at(inputs.series, pick_ticker, decision_ts)
+    yes_ask = fetch_yes_ask_at(inputs.series, pick_ticker, decision_ts, default_cache())
     if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
         return ReplayRecord(event_ticker, inputs.series, inputs.target_date,
                             out.mu, out.sigma, pick_ticker, pick_prob, pick_bucket,
