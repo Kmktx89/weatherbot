@@ -58,7 +58,7 @@ The number shown is `1 − P_yes` for the bucket — i.e. the model's confidence
 
 **Decision:** True EV = (calibrated prob − `no_ask`). Take if ≥ 5¢, skip if < 5¢.
 
-NO calibration improves as you approach close (almost perfect at T-36h, badly overconfident at T-12h). The σ=1.0 graduation tightened the residual gap but didn't eliminate it — danger zone still applies.
+NO calibration is best far from close and degrades as you approach it (almost perfect at T-36h, badly overconfident at T-12h in replay). The σ=1.0 graduation tightened the residual gap but didn't eliminate it — danger zone still applies. The replay-measured leadtime gaps assume frozen forecasts; live drift may change the picture, which is what the hourly snapshotter (see "What's still TODO") is now measuring.
 
 ---
 
@@ -132,6 +132,7 @@ Plus the spec at `docs/superpowers/specs/2026-05-19-weatherbot-model-lab-design.
 ## What's still TODO
 
 - **Forward-shadow validate σ=1.0** for two weeks. Shadow runner is wired; tail `shadow_picks.jsonl` and run `lab shadow-summary --config live-today --days 14` after enough data accrues.
+- **Hourly LIVE_TODAY snapshotter** (`snapshot.py` → `live_picks_log.jsonl`) started 2026-05-20. Registered as Windows scheduled task `Weatherbot-Snapshot` (hourly, battery-tolerant, 5-min timeout). Writes one row per open event per fire with μ/σ, all bucket probs/EVs, market prices, and lead_hours against close. First calibration cut (live formula, lead-binned) usable after ~5 days of accrual (≈2026-05-25); two-week cut around 2026-06-03. The replay-based leadtime calibration in `prediction-calibration.md` measures only price-snapshot effects (forecasts are frozen in archive); this log measures live forecast drift too.
 - **Per-city σ refit** — DEN has sd=2.06 °F; might want city-specific σ. Sweep later.
 - **Live-formula BIAS refit** — current BIAS is calibrated for the no-NWS replay formula. With NWS overlay added live, residual bias may exist. Refit after 30 days of `nws_log.jsonl`.
 - **Closer-to-Platt-scaling calibration** — the YES gap is +8.8 pp at σ=1.0; not zero. A learned monotonic recalibration could close most of it. Eventually.

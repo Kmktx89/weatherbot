@@ -222,6 +222,8 @@ lab/.cache.sqlite-journal
 lab/.cache.sqlite-wal
 lab/.cache.sqlite-shm
 shadow_picks.jsonl
+live_picks_log.jsonl
+snapshot.err
 
 # TLS material (generated locally by mkcert; never commit)
 weatherbot-cert.pem
