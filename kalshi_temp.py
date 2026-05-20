@@ -1220,7 +1220,17 @@ class Handler(BaseHTTPRequestHandler):
 
 def cmd_serve(args):
     server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
-    print(f"kalshi_temp dashboard: http://localhost:{args.port}/", flush=True)
+    scheme = "http"
+    if args.https:
+        import ssl
+        if not args.cert or not args.key:
+            sys.exit("--https requires --cert and --key (use mkcert to generate; "
+                     "see docs/superpowers/reports/* for setup notes)")
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=args.cert, keyfile=args.key)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    print(f"kalshi_temp dashboard: {scheme}://localhost:{args.port}/", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1746,6 +1756,10 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("serve", help="run the local dashboard HTTP server")
     s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--https", action="store_true",
+                   help="serve over HTTPS; requires --cert and --key")
+    s.add_argument("--cert", help="path to PEM cert (use mkcert to generate)")
+    s.add_argument("--key", help="path to PEM private key")
     s.set_defaults(func=cmd_serve)
 
     pr = sub.add_parser("predict", help="run the model on one event ticker")
