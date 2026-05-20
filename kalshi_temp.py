@@ -511,78 +511,116 @@ DASHBOARD_HTML = r"""<!doctype html>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Weatherbot">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  :root {
+    color-scheme: dark;
+    --bg: #000;
+    --bg-elev: #0a0a0a;
+    --border: #1f1f1f;
+    --border-strong: #2a2a2a;
+    --text: #fafafa;
+    --text-muted: #8a8a8a;
+    --text-dim: #555;
+    --pos: #00d97e;
+    --neg: #ff3a3a;
+  }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         font-variant-numeric: tabular-nums;
+         font-feature-settings: 'tnum' 1, 'cv11' 1;
          max-width: 1400px; margin: 0 auto; padding: 1rem;
-         background: #0f1115; color: #d8dde8;
-         -webkit-text-size-adjust: 100%; }
-  h1 { font-size: 1.3rem; margin: 0 0 1rem; display: flex; gap: 0.75rem;
-       align-items: center; flex-wrap: wrap; }
-  h1 small { color: #6b7280; font-weight: normal; font-size: 0.8rem; }
-  .event { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px;
-           padding: 1rem; margin-bottom: 1.25rem; }
-  .event h2 { font-size: 1rem; margin: 0 0 0.4rem; }
-  .summary { display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: 0.82rem; color: #a0a8b8; }
-  .summary b { color: #e6ebf5; }
-  .event > table, .tool-out > table { /* fallback for legacy spots */ }
+         background: var(--bg); color: var(--text);
+         -webkit-text-size-adjust: 100%;
+         -webkit-font-smoothing: antialiased; }
+  h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;
+       margin: 0 0 1rem;
+       display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap;
+       border-bottom: 2px solid var(--text); padding-bottom: 0.75rem; }
+  h1 small { color: var(--text-muted); font-weight: 400; font-size: 0.78rem; }
+  .event { background: var(--bg-elev); border: 1px solid var(--border);
+           border-radius: 0; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+  .event h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem;
+              letter-spacing: -0.01em;
+              border-bottom: 1px solid var(--border-strong); padding-bottom: 0.5rem; }
+  .summary { display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: 0.78rem;
+             color: var(--text-muted); margin-bottom: 0.5rem; }
+  .summary b { color: var(--text); font-weight: 600; }
   .table-wrap { overflow-x: auto; margin-top: 0.75rem; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { padding: 0.35rem 0.5rem; text-align: right; border-bottom: 1px solid #232730;
+  th, td { padding: 0.4rem 0.55rem; text-align: right; border-bottom: 1px solid var(--border);
            white-space: nowrap; }
-  th { color: #8892a4; font-weight: 500; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.68rem;
+       text-transform: uppercase; letter-spacing: 0.07em;
+       border-bottom: 1px solid var(--text-muted); }
   th:first-child, td:first-child { text-align: left; }
-  .pos { color: #56d364; }
-  .neg { color: #f85149; }
-  .dim { color: #6b7280; }
-  .hi  { background: rgba(86, 211, 100, 0.08); }
-  .bar { display: inline-block; height: 6px; width: 60px; background: #2a2e38;
-         border-radius: 3px; vertical-align: middle; margin-left: 6px; }
-  .bar > span { display: block; height: 100%; background: #58a6ff; border-radius: 3px; }
-  button { background: #238636; color: #fff; border: 0; padding: 0.4rem 0.8rem;
-           border-radius: 4px; cursor: pointer; font: inherit; }
-  button:disabled { opacity: 0.5; cursor: wait; }
-  #err { color: #f85149; }
+  .pos { color: var(--pos); font-weight: 600; }
+  .neg { color: var(--neg); font-weight: 600; }
+  .dim { color: var(--text-dim); }
+  .bucket-name { font-weight: 500; color: var(--text); }
+  .prob-cell { font-weight: 600; background-clip: padding-box; }
+  .hi-row td { border-bottom-color: var(--pos); }
+  .hi-row td.bucket-name { font-weight: 700; }
+  button { background: var(--text); color: var(--bg); border: 0;
+           padding: 0.45rem 0.95rem; border-radius: 0; cursor: pointer;
+           font: inherit; font-weight: 600; font-size: 0.85rem;
+           letter-spacing: 0.02em; text-transform: uppercase; }
+  button:hover { background: var(--pos); }
+  button:disabled { opacity: 0.4; cursor: wait; }
+  #err { color: var(--neg); font-weight: 500; font-size: 0.85rem; }
   .tools { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1.25rem; }
-  .tool { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 0.9rem; }
-  .tool h3 { font-size: 0.95rem; margin: 0 0 0.6rem; color: #e6ebf5;
-             display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
-  .presets { font-size: 0.75rem; color: #8892a4; font-weight: normal; }
-  .preset { background: #2a2e38; padding: 0.2rem 0.55rem; margin-left: 0.3rem;
-            font-size: 0.75rem; border-radius: 3px; }
-  .preset:hover { background: #364050; }
+  .tool { background: var(--bg-elev); border: 1px solid var(--border); padding: 0.9rem 1rem; }
+  .tool h3 { font-size: 0.72rem; font-weight: 600;
+             color: var(--text-muted);
+             text-transform: uppercase; letter-spacing: 0.07em;
+             margin: 0 0 0.75rem;
+             display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;
+             border-bottom: 1px solid var(--border-strong); padding-bottom: 0.5rem; }
+  .presets { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; }
+  .preset { background: transparent; color: var(--text);
+            border: 1px solid var(--border-strong);
+            padding: 0.25rem 0.6rem; margin-left: 0.3rem;
+            font-size: 0.7rem; font-weight: 500;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            cursor: pointer; }
+  .preset:hover { background: var(--text); color: var(--bg); }
   .tool form { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: end; }
-  .tool label { display: flex; flex-direction: column; font-size: 0.75rem;
-                color: #8892a4; gap: 0.2rem; }
+  .tool label { display: flex; flex-direction: column; font-size: 0.65rem;
+                color: var(--text-muted); gap: 0.25rem;
+                text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
   .tool label.wide { flex: 1 1 100%; }
-  .tool input, .tool select { background: #0f1115; color: #d8dde8;
-                              border: 1px solid #2a2e38; border-radius: 4px;
-                              padding: 0.3rem 0.4rem; font: inherit; min-width: 7rem; }
+  .tool input, .tool select { background: var(--bg); color: var(--text);
+                              border: 1px solid var(--border-strong); border-radius: 0;
+                              padding: 0.4rem 0.55rem; font: inherit; font-weight: 500;
+                              font-variant-numeric: tabular-nums;
+                              min-width: 7rem; }
+  .tool input:focus, .tool select:focus { outline: none; border-color: var(--text); }
   .tool input[type=text] { min-width: 14rem; }
-  .tool-out { margin-top: 0.75rem; font-size: 0.85rem; color: #c0c7d4; }
+  .tool-out { margin-top: 0.75rem; font-size: 0.82rem; color: var(--text); }
   .tool-out table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-  .tool-out th, .tool-out td { padding: 0.25rem 0.5rem; text-align: right;
-                                border-bottom: 1px solid #232730; font-size: 0.8rem; }
+  .tool-out th, .tool-out td { padding: 0.3rem 0.5rem; text-align: right;
+                                border-bottom: 1px solid var(--border); font-size: 0.78rem; }
   .tool-out th:first-child, .tool-out td:first-child { text-align: left; }
-  .kv { display: inline-block; margin-right: 1rem; }
-  .kv b { color: #e6ebf5; }
+  .kv { display: inline-block; margin-right: 1.25rem; color: var(--text-muted); font-size: 0.82rem; }
+  .kv b { color: var(--text); font-weight: 600; margin-left: 0.25rem; }
   @media (max-width: 900px) { .tools { grid-template-columns: 1fr; } }
   @media (max-width: 600px) {
-    body { padding: 0.6rem; }
-    h1 { font-size: 1.15rem; gap: 0.5rem; }
+    body { padding: 0.7rem; }
+    h1 { font-size: 1.25rem; gap: 0.5rem; }
     .tool h3 { flex-direction: column; align-items: flex-start; gap: 0.25rem; }
     .presets { display: flex; flex-wrap: wrap; gap: 0.25rem; }
-    .preset { margin-left: 0; padding: 0.4rem 0.7rem; font-size: 0.8rem; }
+    .preset { margin-left: 0; padding: 0.4rem 0.7rem; font-size: 0.72rem; }
     /* 16px minimum on inputs prevents iOS Safari from auto-zooming on focus. */
-    .tool input, .tool select, button { font-size: 1rem; padding: 0.5rem 0.6rem; }
+    .tool input, .tool select, button { font-size: 1rem; padding: 0.55rem 0.65rem; }
     .tool input[type=text] { min-width: 0; width: 100%; }
-    .summary { font-size: 0.78rem; gap: 0.6rem 1rem; }
+    .summary { font-size: 0.75rem; gap: 0.5rem 1rem; }
     table { font-size: 0.78rem; }
-    th, td { padding: 0.3rem 0.4rem; }
+    th, td { padding: 0.35rem 0.4rem; }
   }
 </style>
 </head>
@@ -647,6 +685,34 @@ const pct    = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
 const money  = v => v == null ? '—' : '$' + v.toFixed(2);
 const signed = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '¢';
 const cls    = v => v == null ? 'dim' : v > 0.03 ? 'pos' : v < -0.03 ? 'neg' : 'dim';
+
+// Conditional cell formatting helpers — Bloomberg-style heat:
+// prob cells get a horizontal green fill scaled to the probability;
+// EV cells get a background tint whose alpha scales with |EV|.
+const probBg = p => {
+  if (p == null) return '';
+  const pctW = Math.round(p * 100);
+  const alpha = (0.06 + p * 0.28).toFixed(3);
+  return ` style="background:linear-gradient(to right,rgba(0,217,126,${alpha}) ${pctW}%,transparent ${pctW}%);"`;
+};
+const evCellAttr = v => {
+  if (v == null) return ' class="dim"';
+  if (v > 0.03) {
+    const a = Math.min(0.35, v * 2.0).toFixed(3);
+    return ` class="pos" style="background:rgba(0,217,126,${a});"`;
+  }
+  if (v < -0.03) {
+    const a = Math.min(0.35, -v * 2.0).toFixed(3);
+    return ` class="neg" style="background:rgba(255,58,58,${a});"`;
+  }
+  return ' class="dim"';
+};
+const wrClass = wr => {
+  if (wr == null) return 'dim';
+  if (wr >= 0.70) return 'pos';
+  if (wr <= 0.40) return 'neg';
+  return '';
+};
 
 // Opens an aux page. On desktop it's a separate OS window (resizable,
 // snappable, draggable). On iOS / Android / standalone PWAs, window.open
@@ -747,14 +813,14 @@ function render(data) {
       <th>NO ask</th><th>EV (yes)</th><th>EV (no)</th><th>Vol 24h</th></tr></thead><tbody>`;
     for (const mk of ev.markets) {
       const evMax = Math.max(mk.ev_yes ?? -1, mk.ev_no ?? -1);
-      html += `<tr class="${evMax > 0.05 ? 'hi' : ''}">`;
-      html += `<td>${mk.subtitle}</td>`;
-      html += `<td>${pct(mk.prob)}<span class="bar"><span style="width:${((mk.prob||0)*100).toFixed(0)}%"></span></span></td>`;
+      html += `<tr class="${evMax > 0.05 ? 'hi-row' : ''}">`;
+      html += `<td class="bucket-name">${mk.subtitle}</td>`;
+      html += `<td class="prob-cell"${probBg(mk.prob)}>${pct(mk.prob)}</td>`;
       html += `<td>${money(mk.yes_bid)}</td>`;
       html += `<td>${money(mk.yes_ask)}</td>`;
       html += `<td>${money(mk.no_ask)}</td>`;
-      html += `<td class="${cls(mk.ev_yes)}">${signed(mk.ev_yes)}</td>`;
-      html += `<td class="${cls(mk.ev_no)}">${signed(mk.ev_no)}</td>`;
+      html += `<td${evCellAttr(mk.ev_yes)}>${signed(mk.ev_yes)}</td>`;
+      html += `<td${evCellAttr(mk.ev_no)}>${signed(mk.ev_no)}</td>`;
       html += `<td class="dim">${mk.vol_24h ? mk.vol_24h.toFixed(0) : '—'}</td>`;
       html += `</tr>`;
     }
@@ -857,7 +923,8 @@ function renderBacktest(d, out) {
       const skip = s.skip_reasons ? Object.entries(s.skip_reasons).map(([k,n]) => `${n}× ${k}`).join(' · ') : '';
       return `<div><b>${label}:</b> no bets${skip ? ' · <span class="dim">' + skip + '</span>' : ''}</div>`;
     }
-    return `<div><b>${label}:</b> ${s.bets} bets · ${s.wins} wins (${(s.win_rate*100).toFixed(1)}%) · `
+    return `<div><b>${label}:</b> ${s.bets} bets · ${s.wins} wins `
+         + `(<span class="${wrClass(s.win_rate)}">${(s.win_rate*100).toFixed(1)}%</span>) · `
          + `P/L <b class="${s.total_pnl >= 0 ? 'pos' : 'neg'}">$${s.total_pnl.toFixed(3)}</b> · `
          + `avg $${s.avg_pnl.toFixed(3)} · max DD $${s.max_drawdown.toFixed(3)}</div>`;
   };
@@ -907,26 +974,41 @@ SCHEDULE_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entry windows</title>
 <link rel="apple-touch-icon" href="/icon.png">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-         background: #0f1115; color: #d8dde8; margin: 0; padding: 1rem; }
-  h1 { font-size: 1.05rem; margin: 0 0 0.4rem; color: #e6ebf5; }
-  p  { font-size: 0.82rem; color: #a0a8b8; margin: 0 0 0.9rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-  th, td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid #232730; }
-  th { color: #8892a4; font-weight: 500; }
-  .status { font-weight: 600; }
-  .status.in    { color: #56d364; }
-  .status.pre   { color: #f0c674; }
-  .status.post  { color: #6b7280; }
-  .now { color: #8892a4; font-size: 0.75rem; margin-top: 0.75rem; }
-  .back { display: inline-block; color: #58a6ff; text-decoration: none;
-          font-size: 0.85rem; margin-bottom: 0.6rem; }
-  .back:hover { text-decoration: underline; }
+  :root { color-scheme: dark;
+          --bg: #000; --border: #1f1f1f; --border-strong: #2a2a2a;
+          --text: #fafafa; --text-muted: #8a8a8a; --text-dim: #555;
+          --pos: #00d97e; --warn: #ffd700; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         font-variant-numeric: tabular-nums;
+         -webkit-font-smoothing: antialiased;
+         background: var(--bg); color: var(--text); margin: 0; padding: 1rem 1.25rem; }
+  h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em;
+       margin: 0 0 0.5rem; color: var(--text);
+       border-bottom: 2px solid var(--text); padding-bottom: 0.5rem; }
+  p  { font-size: 0.78rem; color: var(--text-muted); margin: 0 0 0.9rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { padding: 0.45rem 0.55rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.68rem;
+       text-transform: uppercase; letter-spacing: 0.07em;
+       border-bottom: 1px solid var(--text-muted); }
+  .status { font-weight: 600; font-size: 0.75rem;
+            text-transform: uppercase; letter-spacing: 0.05em; }
+  .status.in    { color: var(--pos); }
+  .status.pre   { color: var(--warn); }
+  .status.post  { color: var(--text-dim); }
+  .now { color: var(--text-muted); font-size: 0.7rem; margin-top: 0.75rem;
+         text-transform: uppercase; letter-spacing: 0.05em; }
+  .back { display: inline-block; color: var(--text-muted); text-decoration: none;
+          font-size: 0.7rem; margin-bottom: 0.75rem;
+          text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .back:hover { color: var(--text); }
 </style>
 </head><body>
   <a class="back" href="/">← Dashboard</a>
@@ -1005,34 +1087,51 @@ SOURCES_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Data sources</title>
 <link rel="apple-touch-icon" href="/icon.png">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-         background: #0f1115; color: #d8dde8; margin: 0; padding: 1rem 1.25rem;
-         line-height: 1.45; }
-  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; color: #e6ebf5; }
-  h2 { font-size: 0.95rem; margin: 1.2rem 0 0.35rem; color: #e6ebf5; }
-  p  { font-size: 0.86rem; color: #c0c7d4; margin: 0.3rem 0; }
-  .src { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 6px;
-         padding: 0.7rem 0.9rem; margin: 0.6rem 0; }
-  .src h3 { margin: 0 0 0.3rem; font-size: 0.95rem; color: #58a6ff; }
-  .src .meta { font-size: 0.78rem; color: #8892a4; margin: 0.2rem 0 0.4rem; }
+  :root { color-scheme: dark;
+          --bg: #000; --bg-elev: #0a0a0a; --border: #1f1f1f; --border-strong: #2a2a2a;
+          --text: #fafafa; --text-muted: #8a8a8a; --text-dim: #555;
+          --pos: #00d97e; --warn: #ffd700; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         font-variant-numeric: tabular-nums;
+         -webkit-font-smoothing: antialiased;
+         background: var(--bg); color: var(--text); margin: 0; padding: 1rem 1.25rem;
+         line-height: 1.5; }
+  h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em;
+       margin: 0 0 0.75rem; color: var(--text);
+       border-bottom: 2px solid var(--text); padding-bottom: 0.5rem; }
+  h2 { font-size: 0.85rem; font-weight: 600; margin: 1.4rem 0 0.5rem; color: var(--text);
+       text-transform: uppercase; letter-spacing: 0.06em; }
+  p  { font-size: 0.84rem; color: var(--text); margin: 0.3rem 0; }
+  .src { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 0;
+         padding: 0.85rem 1rem; margin: 0.6rem 0; }
+  .src h3 { margin: 0 0 0.3rem; font-size: 0.85rem; font-weight: 600;
+            color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; }
+  .src .meta { font-size: 0.74rem; color: var(--text-muted); margin: 0.2rem 0 0.5rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.4rem 0; }
-  th, td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid #232730; vertical-align: top; }
-  th { color: #8892a4; font-weight: 500; }
-  .live    { color: #56d364; font-weight: 600; }
-  .fcst    { color: #f0c674; font-weight: 600; }
-  code { background: #0f1115; padding: 0.05rem 0.3rem; border-radius: 3px;
-         font-size: 0.78rem; color: #c0c7d4; }
-  .tldr { background: #14181f; border-left: 3px solid #58a6ff;
-          padding: 0.55rem 0.8rem; font-size: 0.85rem; color: #d8dde8;
-          margin: 0.9rem 0; }
-  .back { display: inline-block; color: #58a6ff; text-decoration: none;
-          font-size: 0.85rem; margin-bottom: 0.6rem; }
-  .back:hover { text-decoration: underline; }
+  th, td { padding: 0.4rem 0.55rem; text-align: left; border-bottom: 1px solid var(--border);
+           vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.68rem;
+       text-transform: uppercase; letter-spacing: 0.07em;
+       border-bottom: 1px solid var(--text-muted); }
+  .live    { color: var(--pos); font-weight: 600; }
+  .fcst    { color: var(--warn); font-weight: 600; }
+  code { background: var(--bg); border: 1px solid var(--border-strong);
+         padding: 0.05rem 0.35rem; border-radius: 0;
+         font-size: 0.76rem; color: var(--text); font-family: 'Inter', monospace; }
+  .tldr { background: var(--bg-elev); border-left: 3px solid var(--text);
+          padding: 0.6rem 0.85rem; font-size: 0.84rem; color: var(--text);
+          margin: 1rem 0; }
+  .back { display: inline-block; color: var(--text-muted); text-decoration: none;
+          font-size: 0.7rem; margin-bottom: 0.75rem;
+          text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .back:hover { color: var(--text); }
 </style>
 </head><body>
   <a class="back" href="/">← Dashboard</a>
