@@ -52,6 +52,43 @@ STALE_AFTER_HOURS = 36.0
 FORECAST_SPREAD_WARN = 15.0
 METAR_DIVERGE_WARN = 20.0
 
+# "Best bet" thresholds - mirror kalshi_temp.MIN_BEST_EV and _sanity_keep_no
+# so the card surfaces exactly the same picks the live Predict button would.
+MIN_BEST_EV = 0.05
+SANITY_MARKET_CONFIDENT_YES = 0.85
+SANITY_MODEL_LOW_PROB = 0.40
+
+
+def _sanity_keep_no(bucket):
+    """Suppress Best-EV-NO when market is highly confident YES and model
+    strongly disagrees - mirrors kalshi_temp._sanity_keep_no."""
+    ya = bucket.get("yes_ask")
+    p = bucket.get("prob")
+    if ya is None or p is None:
+        return True
+    if ya >= SANITY_MARKET_CONFIDENT_YES and p <= SANITY_MODEL_LOW_PROB:
+        return False
+    return True
+
+
+def predict_summary(buckets):
+    """Return {highest_probability, best_ev_yes, best_ev_no} - the exact same
+    derived picks the live Predict button surfaces (predict_event in
+    kalshi_temp.py:1696). Returns None for any pick that doesn't meet the
+    MIN_BEST_EV or sanity threshold."""
+    probs = [b for b in buckets if b.get("prob") is not None]
+    top = max(probs, key=lambda b: b["prob"]) if probs else None
+    by = max(
+        (b for b in buckets
+         if b.get("ev_yes") is not None and b["ev_yes"] >= MIN_BEST_EV),
+        key=lambda b: b["ev_yes"], default=None)
+    bn = max(
+        (b for b in buckets
+         if b.get("ev_no") is not None and b["ev_no"] >= MIN_BEST_EV
+         and _sanity_keep_no(b)),
+        key=lambda b: b["ev_no"], default=None)
+    return {"highest_probability": top, "best_ev_yes": by, "best_ev_no": bn}
+
 
 def today_et(now=None):
     """Today's calendar date in America/New_York as ISO string."""
@@ -244,7 +281,14 @@ def latest_settled_bucket(rows, target_date, series):
 
 
 def build_event_entry(series, row, qc, settled_bucket):
-    """Shape the per-event dict written to the daily archive."""
+    """Shape the per-event dict written to the daily archive.
+
+    Includes pre-computed highest_probability / best_ev_yes / best_ev_no so
+    the card renders the same compact summary the live Predict button shows.
+    Raw buckets are kept too for cross-checking and future re-renders.
+    """
+    buckets = row.get("buckets") or []
+    summary = predict_summary(buckets)
     return {
         "series": series,
         "city": SERIES_CITY[series],
@@ -254,7 +298,10 @@ def build_event_entry(series, row, qc, settled_bucket):
         "close_time": row.get("close_time"),
         "model": row.get("model"),
         "forecasts": row.get("forecasts"),
-        "buckets": row.get("buckets"),
+        "buckets": buckets,
+        "highest_probability": summary["highest_probability"],
+        "best_ev_yes": summary["best_ev_yes"],
+        "best_ev_no": summary["best_ev_no"],
         "settled": bool(settled_bucket),
         "settled_bucket": settled_bucket,
         "qc": qc,

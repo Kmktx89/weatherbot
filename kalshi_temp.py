@@ -1290,6 +1290,7 @@ T24_HTML = r"""<!doctype html>
 const fmtTemp = v => v == null ? "—" : v.toFixed(1) + "°";
 const fmtPct  = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
 const fmtSign = v => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "¢";
+const money   = v => v == null ? "—" : "$" + v.toFixed(2);
 const cls     = v => v == null ? "dim" : v > 0.03 ? "pos" : v < -0.03 ? "neg" : "dim";
 
 function fmtUtc(iso) {
@@ -1315,45 +1316,53 @@ function renderCard(ev) {
       <div class="row">No T-24h snapshot available for this event today.</div>
     </div>`;
   }
-  const m = ev.model || {};
-  const f = ev.forecasts || {};
   const qc = ev.qc || {};
   const badges = (qc.warnings || []).map(w => `<span class="badge">${w}</span>`).join(" ");
   const liveLink = `<a href="/" title="Open live dashboard">→ live</a>`;
-  const rows = (ev.buckets || []).map(b => {
-    const pa = probBg(b.prob);
-    return `<tr>
-      <td>${b.subtitle ?? b.ticker ?? "?"}</td>
-      <td${pa}>${fmtPct(b.prob)}</td>
-      <td>${b.yes_bid == null ? "—" : b.yes_bid.toFixed(2)}/${b.yes_ask == null ? "—" : b.yes_ask.toFixed(2)}</td>
-      <td class="${cls(b.ev_yes)}">${fmtSign(b.ev_yes)}</td>
-      <td class="${cls(b.ev_no)}">${fmtSign(b.ev_no)}</td>
-    </tr>`;
-  }).join("");
+
+  // Predict-button-style summary: only highest probability, best EV YES (if
+  // distinct), best EV NO. Same shape predict_event(ticker) surfaces.
+  const top = ev.highest_probability;
+  const by  = ev.best_ev_yes;
+  const bn  = ev.best_ev_no;
+
+  let picks = "";
+  if (top) {
+    picks += `<div class="row pick">
+      <span class="lbl">Highest probability</span>${top.subtitle} (${fmtPct(top.prob)})<br>
+      &nbsp;YES @ ${money(top.yes_ask)} → <span class="${cls(top.ev_yes)}">${fmtSign(top.ev_yes)}</span>,
+      NO @ ${money(top.no_ask)} → <span class="${cls(top.ev_no)}">${fmtSign(top.ev_no)}</span>
+    </div>`;
+  }
+  if (by && (!top || by.ticker !== top.ticker)) {
+    picks += `<div class="row pick">
+      <span class="lbl">Best EV YES</span>${by.subtitle} @ ${money(by.yes_ask)} →
+      <span class="${cls(by.ev_yes)}">${fmtSign(by.ev_yes)}</span>
+      <span class="dim">(P=${fmtPct(by.prob)})</span>
+    </div>`;
+  }
+  if (bn) {
+    picks += `<div class="row pick">
+      <span class="lbl">Best EV NO</span>${bn.subtitle} @ ${money(bn.no_ask)} →
+      <span class="${cls(bn.ev_no)}">${fmtSign(bn.ev_no)}</span>
+      <span class="dim">(P_no=${fmtPct(1 - bn.prob)})</span>
+    </div>`;
+  }
+  if (!picks) {
+    picks = `<div class="row dim">No qualifying picks (no EV above ${(0.05*100).toFixed(0)}¢).</div>`;
+  }
+
   const resolution = ev.settled
     ? `<div class="row resolved">Resolved: ${ev.settled_bucket}</div>`
     : `<div class="row"><span class="lbl">Resolves</span>${fmtUtc(ev.close_time)}</div>`;
+
   return `<div class="card">
     <div class="card-head">
       <div class="title">${ev.city} <small>${ev.event_ticker}</small> ${badges}</div>
       <div class="meta">lead ${ev.lead_hours == null ? "—" : ev.lead_hours.toFixed(1)}h
         · snapshot ${fmtUtc(ev.snapshot_ts)} · ${liveLink}</div>
     </div>
-    <div class="row">
-      <span class="lbl">ECMWF</span>${fmtTemp(f.ecmwf)}
-      <span class="lbl" style="margin-left:0.8rem">GFS</span>${fmtTemp(f.gfs)}
-      <span class="lbl" style="margin-left:0.8rem">NWS</span>${fmtTemp(f.nws)}
-      <span class="lbl" style="margin-left:0.8rem">METAR</span>${fmtTemp(f.metar)}
-    </div>
-    <div class="row">
-      <span class="lbl">μ</span>${fmtTemp(m.mu)}
-      <span class="lbl" style="margin-left:0.8rem">σ</span>${m.sigma == null ? "—" : m.sigma.toFixed(2)}
-      <span class="lbl" style="margin-left:0.8rem">sources</span>${m.sources ?? "—"}
-    </div>
-    <table>
-      <thead><tr><th>Bucket</th><th>p</th><th>YES bid/ask</th><th>EV(YES)</th><th>EV(NO)</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
+    ${picks}
     ${resolution}
   </div>`;
 }

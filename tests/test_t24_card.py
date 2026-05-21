@@ -177,6 +177,55 @@ def test_check_metar_sanity_warn():
     assert "metar_diverges_" in reason
 
 
+# -------- predict_summary (mirror of predict_event picks) --------
+
+def test_predict_summary_highest_probability_is_max_prob():
+    row = make_row()
+    s = t24.predict_summary(row["buckets"])
+    assert s["highest_probability"]["subtitle"] == "67° or below"  # 57.6%
+
+
+def test_predict_summary_best_ev_no_respects_min_threshold():
+    # Bump all EV_NO below the 5c threshold -> no best_ev_no surfaced.
+    row = make_row()
+    for b in row["buckets"]:
+        b["ev_no"] = 0.01
+    s = t24.predict_summary(row["buckets"])
+    assert s["best_ev_no"] is None
+
+
+def test_predict_summary_sanity_filter_drops_confident_no():
+    # If market is at YES >= 0.85 AND model prob <= 0.40, drop the NO pick
+    # (mirrors kalshi_temp._sanity_keep_no).
+    row = make_row()
+    target = row["buckets"][0]
+    target["yes_ask"] = 0.88
+    target["prob"]    = 0.35
+    target["ev_no"]   = 0.30
+    # Zero out other NO EVs so target would otherwise win.
+    for b in row["buckets"][1:]:
+        b["ev_no"] = 0.0
+    s = t24.predict_summary(row["buckets"])
+    assert s["best_ev_no"] is None  # sanity-filtered
+
+
+def test_predict_summary_matches_predict_event_logic():
+    # Build a row, then compare predict_summary output against the inline
+    # logic predict_event uses in kalshi_temp.py.
+    row = make_row()
+    bs = row["buckets"]
+    expected_top = max(bs, key=lambda b: b["prob"])
+    expected_by  = max((b for b in bs if b["ev_yes"] >= 0.05),
+                       key=lambda b: b["ev_yes"], default=None)
+    expected_bn  = max((b for b in bs if b["ev_no"]  >= 0.05
+                        and not (b["yes_ask"] >= 0.85 and b["prob"] <= 0.40)),
+                       key=lambda b: b["ev_no"],  default=None)
+    s = t24.predict_summary(bs)
+    assert s["highest_probability"] == expected_top
+    assert s["best_ev_yes"]         == expected_by
+    assert s["best_ev_no"]          == expected_bn
+
+
 # -------- pick_best_candidate fallback --------
 
 def test_pick_best_uses_first_passing():
