@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import requests
 
@@ -630,6 +631,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   <button id="btn" onclick="refresh(true)">Refresh</button>
   <button onclick="openPane('/schedule', 'kt-schedule', 460, 460)" style="background:#2f4366;">Schedule</button>
   <button onclick="openPane('/sources', 'kt-sources', 620, 720)" style="background:#2f4366;">Sources</button>
+  <button onclick="openPane('/t24', 'kt-t24', 720, 900)" style="background:#2f4366;">T-24h</button>
 </h1>
 <div id="err"></div>
 
@@ -1194,10 +1196,205 @@ SOURCES_HTML = r"""<!doctype html>
 """
 
 
+T24_HTML = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T-24h calls</title>
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  :root { color-scheme: dark;
+          --bg: #000; --bg-elev: #0a0a0a; --border: #1f1f1f; --border-strong: #2a2a2a;
+          --text: #fafafa; --text-muted: #8a8a8a; --text-dim: #555;
+          --pos: #00d97e; --neg: #ff5b6e; --warn: #ffd700; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         font-variant-numeric: tabular-nums;
+         -webkit-font-smoothing: antialiased;
+         background: var(--bg); color: var(--text); margin: 0; padding: 1rem 1.25rem;
+         line-height: 1.5; }
+  h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em;
+       margin: 0 0 0.5rem; color: var(--text);
+       border-bottom: 2px solid var(--text); padding-bottom: 0.5rem; }
+  .lede { font-size: 0.78rem; color: var(--text-muted); margin: 0 0 1rem; }
+  .summary { font-size: 0.75rem; color: var(--text-muted);
+             text-transform: uppercase; letter-spacing: 0.05em;
+             margin-bottom: 1rem; }
+  .summary b { color: var(--text); font-weight: 600; }
+  .summary .pos b { color: var(--pos); }
+  .summary .warn b { color: var(--warn); }
+  .summary .neg b { color: var(--neg); }
+  .card { background: var(--bg-elev); border: 1px solid var(--border);
+          padding: 0.9rem 1rem; margin: 0.7rem 0; }
+  .card.missing { color: var(--text-muted); }
+  .card.blocked { border-color: var(--neg); }
+  .card-head { display: flex; flex-wrap: wrap; align-items: baseline;
+               justify-content: space-between; gap: 0.5rem;
+               margin-bottom: 0.4rem; }
+  .card-head .title { font-size: 0.95rem; font-weight: 600; color: var(--text);
+                      letter-spacing: 0.01em; }
+  .card-head .title small { color: var(--text-muted); font-weight: 500;
+                            margin-left: 0.4rem; font-size: 0.78rem; }
+  .card-head .meta  { font-size: 0.72rem; color: var(--text-muted);
+                      text-transform: uppercase; letter-spacing: 0.05em; }
+  .card-head .meta a { color: var(--text-muted); text-decoration: none;
+                       border-bottom: 1px dotted var(--text-muted); }
+  .card-head .meta a:hover { color: var(--text); }
+  .row { font-size: 0.78rem; color: var(--text); margin: 0.2rem 0; }
+  .row .lbl { color: var(--text-muted); margin-right: 0.4rem;
+              text-transform: uppercase; letter-spacing: 0.05em;
+              font-size: 0.7rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem;
+          margin: 0.5rem 0 0.2rem; }
+  th, td { padding: 0.3rem 0.5rem; text-align: right; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.66rem;
+       text-transform: uppercase; letter-spacing: 0.07em;
+       border-bottom: 1px solid var(--text-muted); }
+  .pos { color: var(--pos); font-weight: 600; }
+  .neg { color: var(--neg); font-weight: 600; }
+  .dim { color: var(--text-dim); }
+  .badge { display: inline-block; background: rgba(255,215,0,0.12);
+           color: var(--warn); border: 1px solid rgba(255,215,0,0.4);
+           padding: 0.05rem 0.4rem; border-radius: 3px;
+           font-size: 0.65rem; font-weight: 600;
+           text-transform: uppercase; letter-spacing: 0.04em;
+           margin-right: 0.3rem; }
+  .badge.err { background: rgba(255,91,110,0.12); color: var(--neg);
+               border-color: rgba(255,91,110,0.4); }
+  .resolved   { color: var(--pos); font-weight: 600; }
+  .stale-note { color: var(--warn); margin-left: 0.4rem; }
+  .back { display: inline-block; color: var(--text-muted); text-decoration: none;
+          font-size: 0.7rem; margin-bottom: 0.75rem;
+          text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .back:hover { color: var(--text); }
+  .footer { font-size: 0.7rem; color: var(--text-muted); margin-top: 1rem;
+            border-top: 1px solid var(--border); padding-top: 0.6rem; }
+</style>
+</head><body>
+  <a class="back" href="/">← Dashboard</a>
+  <h1 id="title">T-24h calls</h1>
+  <p class="lede">Frozen prediction for each event at the snapshot nearest 24h before close.
+     These are the calls of record at the entry window the lead-time sweep identified as
+     best risk-adjusted. They are not the same as a live "Predict" run later in the day.</p>
+  <div id="summary" class="summary"></div>
+  <div id="cards">Loading…</div>
+  <div id="footer" class="footer"></div>
+
+<script>
+const fmtTemp = v => v == null ? "—" : v.toFixed(1) + "°";
+const fmtPct  = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const fmtSign = v => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "¢";
+const cls     = v => v == null ? "dim" : v > 0.03 ? "pos" : v < -0.03 ? "neg" : "dim";
+
+function fmtUtc(iso) {
+  if (!iso) return "—";
+  try { return new Date(iso).toISOString().replace("T", " ").slice(0, 16) + " UTC"; }
+  catch { return iso; }
+}
+
+function probBg(p) {
+  if (p == null) return "";
+  const w = Math.round(p * 100);
+  const a = (0.06 + p * 0.28).toFixed(3);
+  return ` style="background:linear-gradient(to right,rgba(0,217,126,${a}) ${w}%,transparent ${w}%);"`;
+}
+
+function renderCard(ev) {
+  if (ev.status === "missing") {
+    return `<div class="card missing">
+      <div class="card-head">
+        <div class="title">${ev.city} <small>—</small> <span class="badge err">waiting</span></div>
+        <div class="meta">${ev.reason || "no snapshot"}</div>
+      </div>
+      <div class="row">No T-24h snapshot available for this event today.</div>
+    </div>`;
+  }
+  const m = ev.model || {};
+  const f = ev.forecasts || {};
+  const qc = ev.qc || {};
+  const badges = (qc.warnings || []).map(w => `<span class="badge">${w}</span>`).join(" ");
+  const liveLink = `<a href="/" title="Open live dashboard">→ live</a>`;
+  const rows = (ev.buckets || []).map(b => {
+    const pa = probBg(b.prob);
+    return `<tr>
+      <td>${b.subtitle ?? b.ticker ?? "?"}</td>
+      <td${pa}>${fmtPct(b.prob)}</td>
+      <td>${b.yes_bid == null ? "—" : b.yes_bid.toFixed(2)}/${b.yes_ask == null ? "—" : b.yes_ask.toFixed(2)}</td>
+      <td class="${cls(b.ev_yes)}">${fmtSign(b.ev_yes)}</td>
+      <td class="${cls(b.ev_no)}">${fmtSign(b.ev_no)}</td>
+    </tr>`;
+  }).join("");
+  const resolution = ev.settled
+    ? `<div class="row resolved">Resolved: ${ev.settled_bucket}</div>`
+    : `<div class="row"><span class="lbl">Resolves</span>${fmtUtc(ev.close_time)}</div>`;
+  return `<div class="card">
+    <div class="card-head">
+      <div class="title">${ev.city} <small>${ev.event_ticker}</small> ${badges}</div>
+      <div class="meta">lead ${ev.lead_hours == null ? "—" : ev.lead_hours.toFixed(1)}h
+        · snapshot ${fmtUtc(ev.snapshot_ts)} · ${liveLink}</div>
+    </div>
+    <div class="row">
+      <span class="lbl">ECMWF</span>${fmtTemp(f.ecmwf)}
+      <span class="lbl" style="margin-left:0.8rem">GFS</span>${fmtTemp(f.gfs)}
+      <span class="lbl" style="margin-left:0.8rem">NWS</span>${fmtTemp(f.nws)}
+      <span class="lbl" style="margin-left:0.8rem">METAR</span>${fmtTemp(f.metar)}
+    </div>
+    <div class="row">
+      <span class="lbl">μ</span>${fmtTemp(m.mu)}
+      <span class="lbl" style="margin-left:0.8rem">σ</span>${m.sigma == null ? "—" : m.sigma.toFixed(2)}
+      <span class="lbl" style="margin-left:0.8rem">sources</span>${m.sources ?? "—"}
+    </div>
+    <table>
+      <thead><tr><th>Bucket</th><th>p</th><th>YES bid/ask</th><th>EV(YES)</th><th>EV(NO)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${resolution}
+  </div>`;
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/t24");
+    if (r.status === 503) {
+      const j = await r.json().catch(() => ({}));
+      document.getElementById("cards").innerHTML =
+        `<div class="card blocked"><div class="row"><b>QC blocked.</b> ${j.error || "no archive yet"}</div></div>`;
+      return;
+    }
+    const j = await r.json();
+    const s = j.qc_summary || {ok:0, warnings:0, errors:0};
+    document.getElementById("title").textContent = `T-24h calls — ${j.target_date}`;
+    let summary = `<span class="pos">OK <b>${s.ok}</b></span> · ` +
+                  `<span class="warn">WARN <b>${s.warnings}</b></span> · ` +
+                  `<span class="neg">ERR <b>${s.errors}</b></span>`;
+    if (j.stale) summary += `<span class="stale-note">· showing ${j.stale_for_date} (today's not yet generated)</span>`;
+    document.getElementById("summary").innerHTML = summary;
+    document.getElementById("cards").innerHTML =
+      (j.events || []).map(renderCard).join("");
+    document.getElementById("footer").textContent =
+      `Generated ${fmtUtc(j.generated_at)}`;
+  } catch (e) {
+    document.getElementById("cards").innerHTML =
+      `<div class="card blocked"><div class="row"><b>Error loading.</b> ${e.message}</div></div>`;
+  }
+}
+load();
+</script>
+</body></html>
+"""
+
+
 STATIC_PAGES = {
     "/":         DASHBOARD_HTML.encode(),
     "/schedule": SCHEDULE_HTML.encode(),
     "/sources":  SOURCES_HTML.encode(),
+    "/t24":      T24_HTML.encode(),
 }
 
 
@@ -1222,6 +1419,66 @@ try:
         ICON_PNG = _f.read()
 except FileNotFoundError:
     ICON_PNG = b""
+
+
+def get_t24_card_payload():
+    """Read today's T-24 card archive, fall back to most recent if today's
+    is missing, overlay live settlement, and return the JSON payload.
+
+    Raises FileNotFoundError if no archive exists at all (caller should
+    return 503).
+    """
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    today_iso = datetime.now(timezone.utc).astimezone(et).date().isoformat()
+    cards_dir = Path("t24_cards")
+    archive = cards_dir / f"{today_iso}.json"
+    stale = False
+    if not archive.exists():
+        # Fall back to the most recent prior archive file.
+        if cards_dir.exists():
+            prior = sorted(cards_dir.glob("[0-9]*.json"))
+            if prior:
+                archive = prior[-1]
+                stale = True
+        if not archive.exists():
+            blocked = cards_dir / f"blocked_{today_iso}.json"
+            if blocked.exists():
+                payload = json.loads(blocked.read_text(encoding="utf-8"))
+                payload["blocked"] = True
+                return payload
+            raise FileNotFoundError("no t24 cards generated yet")
+
+    payload = json.loads(archive.read_text(encoding="utf-8"))
+    if stale:
+        payload["stale"] = True
+        payload["stale_for_date"] = payload.get("target_date")
+
+    # Settlement overlay: scan live_picks_log.jsonl for settled rows matching
+    # each event's (target_date, series). Cheap because the log is small
+    # (a few hundred lines/day).
+    log_path = Path("live_picks_log.jsonl")
+    if log_path.exists():
+        latest_settled = {}  # (target_date, series) -> bucket
+        with log_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not r.get("settled") or not r.get("settled_bucket"):
+                    continue
+                key = (r.get("target_date"), r.get("series"))
+                latest_settled[key] = r["settled_bucket"]
+        for ev in payload.get("events", []):
+            if ev.get("status") == "missing":
+                continue
+            key = (payload.get("target_date"), ev.get("series"))
+            if key in latest_settled:
+                ev["settled"] = True
+                ev["settled_bucket"] = latest_settled[key]
+
+    return payload
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1257,6 +1514,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(500, "application/json",
                            json.dumps({"error": str(e)}).encode())
+            return
+
+        if path == "/api/t24":
+            try:
+                payload = get_t24_card_payload()
+            except FileNotFoundError as e:
+                self._send(503, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+                return
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+                return
+            self._send(200, "application/json", json.dumps(payload).encode())
             return
 
         if path == "/api/predict":
