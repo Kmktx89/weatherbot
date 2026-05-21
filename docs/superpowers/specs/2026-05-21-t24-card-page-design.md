@@ -40,17 +40,52 @@ The hourly snapshot already captures predictions at the T-24h moment as a side e
 
 ## Components
 
-### 1. `generate_t24_card.py` (new, ~80 lines)
+### 1. `generate_t24_card.py` (new, ~150 lines incl. QC)
 
-Standalone script. CLI: `python generate_t24_card.py` (no args). Writes one file: `t24_cards/<today-ET>.json`.
+Standalone script. CLI: `python generate_t24_card.py` (no args). Writes one file: `t24_cards/<today-ET>.json` and one log file: `t24_cards/qc_<today-ET>.log`.
 
 **Selection logic:**
 
 - "Today" = today's calendar date in America/New_York.
-- Iterate `live_picks_log.jsonl` once. For each unique `(target_date, series)` where `target_date == today_et` and `model.mu is not None`, keep the row with `min(|lead_hours − 24|)`.
-- Filter: only series in the dashboard's KXHIGH set (`KXHIGHNY`, `KXHIGHCHI`, `KXHIGHMIA`, `KXHIGHLAX`, `KXHIGHDEN`, `KXHIGHAUS`, `KXHIGHPHIL`).
-- If a series has no snapshot for today, record an explicit `{"status": "missing"}` entry for it so the card can show "Waiting for T-24h snapshot."
+- Iterate `live_picks_log.jsonl` once. For each unique `(target_date, series)` where `target_date == today_et`, collect all candidate rows.
+- Sort candidates by `|lead_hours − 24|` ascending. Run QC against the nearest candidate first; if it fails an auto-resolvable check, fall back to the next-nearest within ±6h of T-24h and retry. The first candidate that passes all hard checks is selected.
+- Filter: only series in the KXHIGH set (`KXHIGHNY`, `KXHIGHCHI`, `KXHIGHMIA`, `KXHIGHLAX`, `KXHIGHDEN`, `KXHIGHAUS`, `KXHIGHPHIL`).
+- If no row passes for a series, record `{"status": "missing", "reason": "<qc_reason>"}` for it so the card can show a placeholder.
 - Write atomically: write to `t24_cards/<today-ET>.json.tmp` then rename. Prevents partial reads if the page loads mid-write.
+
+**QC checks (run against each candidate row in order of nearness to T-24h):**
+
+| Check | Trigger | Outcome |
+|---|---|---|
+| Lead-time accuracy | `|lead_hours − 24| > 2.0` | Soft: try next-nearest in ±6h; if none fits, publish chosen with `lead_off_by_Xh` warning |
+| Model populated | `row.model.mu is None` | Hard: try next-nearest in ±6h; if none, skip event (`no_model_at_t24`) |
+| Bucket probs sum | `sum(buckets.prob)` not in [0.95, 1.05] | Hard: try next-nearest; if none, skip event (`bucket_prob_inconsistency`) |
+| Source count | `model.sources < 2` | Soft: try next-nearest with sources≥2; else publish with `only_N_sources` warning |
+| Buckets + market data present | `buckets == []` or any null bid/ask | Hard: try next-nearest; if none, skip event (`incomplete_market_data`) |
+| Snapshot age | `now − snapshot_ts > 36h` | Hard, no resolve: skip event (`stale_snapshot`) |
+| Forecast spread | `max(forecasts) − min(forecasts) > 15°F` | Soft, no resolve: publish with `wide_forecast_spread_X` warning |
+| METAR sanity | `|metar − mean(non-metar forecasts)| > 20°F` | Soft, no resolve: publish with `metar_diverges_X` warning |
+
+**Output JSON adds:**
+
+```json
+{
+  "qc_summary": { "ok": 6, "warnings": 1, "errors": 0, "missing": 0 },
+  "events": [
+    {
+      "series": "KXHIGHNY",
+      "...": "...",
+      "qc": { "warnings": ["wide_forecast_spread_7.5"], "tried_rows": 1 }
+    }
+  ]
+}
+```
+
+**Global publish-block rule:** the script always writes the file UNLESS every single event errored out. In that pathological case, leave the previous day's archive in place and add a `t24_cards/blocked_<today>.json` sentinel with the QC log. The `/api/t24` endpoint checks for that sentinel and renders a global "QC blocked — see logs" banner.
+
+**Logging:** every QC decision (which row tried, which check failed, what was finally chosen) appends to `t24_cards/qc_<today-ET>.log`.
+
+**Pushover on errors:** if `qc_summary.errors > 0` OR a global block occurred, call `send_pushover` from `alerts.py` with title `weatherbot T-24h QC: N error(s)` and a one-line-per-event body listing each error's reason. Warnings do NOT push.
 
 **Output schema:** `t24_cards/2026-05-21.json`
 
@@ -131,7 +166,7 @@ Same `openPane()` behavior — separate window on desktop, in-tab navigation on 
 |------------------------------------------------------------------|-------------|
 | `kalshi_temp.py`                                                 | edit: add `T24_HTML`, `/api/t24` branch, "T-24h" header button |
 | `generate_t24_card.py`                                           | new file    |
-| `t24_cards/`                                                     | new directory (created by script; gitignored)                  |
+| `t24_cards/`                                                     | new directory (holds `YYYY-MM-DD.json`, `qc_YYYY-MM-DD.log`, optional `blocked_YYYY-MM-DD.json` sentinel; gitignored) |
 | `.gitignore`                                                     | add `t24_cards/`                                               |
 | Scheduled task `WeatherbotT24Card`                               | new (registered via PowerShell one-liner; setup documented)    |
 
@@ -143,13 +178,18 @@ Same `openPane()` behavior — separate window on desktop, in-tab navigation on 
 - **Live-comparison link:** include `→ live` link on each card. Cheap to add, lets the user A/B the frozen call vs the current state.
 - **Daily packaging time:** 13:00 UTC. Safely past every city's T-24h (latest is LAX at ~08:00 UTC). Avoids the user's intended morning review window.
 - **Archive retention:** files accumulate in `t24_cards/`. No pruning. Roughly 5 KB per day; ~2 MB per year. Trivial.
+- **QC alerting:** Pushover fires only on hard errors (skipped events) or global publish-block. Soft warnings remain dashboard-only — visible as badges on the card. Chosen to avoid alert fatigue.
+- **Publish-blocking policy:** the script always overwrites today's card unless *every* event errored out, in which case a `blocked_<date>.json` sentinel is left and the previous day's archive remains. One bad event never sinks the page.
 
 ## Testing
 
 - Unit-test `generate_t24_card.py` selection logic against a synthetic `live_picks_log.jsonl` with multiple snapshots per event spanning leads from 30h down to 18h. Assert: the nearest-to-24h row is chosen; missing series are flagged; non-KXHIGH series are filtered out.
+- Unit-test each QC check in isolation: feed a candidate row designed to trip exactly one check and assert the right warning/error fires.
+- Unit-test the candidate-fallback behavior: first candidate fails a hard check (null `mu`), second candidate within ±6h passes — assert the second is chosen and `tried_rows == 2`.
+- Unit-test the global block path: every event errors → assert no `<date>.json` written, `blocked_<date>.json` present, Pushover stub called once.
 - Smoke-test `/api/t24` by running `generate_t24_card.py` against the real log and curl-checking the endpoint.
-- Visual check `/t24` in browser (desktop pop-out and mobile in-tab).
-- Verify `WeatherbotT24Card` scheduled task fires at 13:00 UTC; verify `t24_cards/<today>.json` exists afterward.
+- Visual check `/t24` in browser (desktop pop-out and mobile in-tab), including a card rendered with a warning badge.
+- Verify `WeatherbotT24Card` scheduled task fires at 13:00 UTC; verify `t24_cards/<today>.json` exists afterward; verify QC log written.
 
 ## Open questions
 
