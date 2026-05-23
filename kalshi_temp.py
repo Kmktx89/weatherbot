@@ -1317,7 +1317,11 @@ function renderCard(ev) {
     </div>`;
   }
   const qc = ev.qc || {};
-  const badges = (qc.warnings || []).map(w => `<span class="badge">${w}</span>`).join(" ");
+  const warnBadges = (qc.warnings || []).map(w => `<span class="badge">${w}</span>`).join(" ");
+  const catchupBadge = ev.catchup_at
+    ? `<span class="badge" style="background:#3b3f5c;color:#dfe3ff;" title="Filled in by hourly catch-up at ${fmtUtc(ev.catchup_at)}">catch-up</span> `
+    : "";
+  const badges = catchupBadge + warnBadges;
   const liveLink = `<a href="/" title="Open live dashboard">→ live</a>`;
 
   // Predict-button-style summary: only highest probability, best EV YES (if

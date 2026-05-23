@@ -7,9 +7,12 @@ or can be auto-resolved within +/-6h) write the chosen row to
 t24_cards/<today-ET>.json.
 
 Designed to run once daily at 13:00 UTC via Windows Task Scheduler, well
-past every KXHIGH city's T-24h moment. Pushover fires only on hard errors
-(skipped events) or global publish-block. Soft warnings render as badges
-on the dashboard card.
+past every KXHIGH city's T-24h moment. On every successful run, one
+Pushover fires with a digest of all events' Predict-button picks (matching
+the /t24 dashboard card). Missing events are noted in the digest body.
+A separate "BLOCKED" Pushover fires only in the catastrophic case where
+every event errored (previous day's archive is then kept). Soft warnings
+render as badges on the dashboard card.
 
 Output:
   t24_cards/<today-ET>.json     - the day's frozen cards + QC summary
@@ -45,6 +48,8 @@ SERIES_CITY = {
 
 # QC tunables - see spec section "QC checks".
 LEAD_BAND_HOURS = 6.0       # only try fallback candidates within +/-6h of T-24
+LEAD_BAND_CATCHUP_HOURS = 18.0  # hourly catch-up: any lead within +/-18h of T-24
+                                # (so any open market with lead 6-42h qualifies)
 LEAD_WARN_DELTA = 2.0       # warn if chosen row's |lead - 24| > this
 MIN_SOURCES_WARN = 2        # warn if < 2 weather sources
 PROB_SUM_BAND = (0.95, 1.05)
@@ -244,16 +249,19 @@ def run_qc(row, now):
     return {"warnings": warnings, "errors": errors}
 
 
-def pick_best_candidate(candidates, now, log_lines):
+def pick_best_candidate(candidates, now, log_lines, band=None):
     """Try candidates in order of nearness-to-24h. Return (row, qc) for the
     first candidate that has no errors; if all candidates have errors, return
     (None, qc_of_last_tried) so the caller can record the failure reason.
 
-    Only candidates with |lead - 24| <= LEAD_BAND_HOURS are considered.
+    Only candidates with |lead - 24| <= `band` are considered (default
+    LEAD_BAND_HOURS; pass LEAD_BAND_CATCHUP_HOURS for hourly catch-up runs).
     """
-    in_band = [r for r in candidates if abs(r["lead_hours"] - 24.0) <= LEAD_BAND_HOURS]
+    if band is None:
+        band = LEAD_BAND_HOURS
+    in_band = [r for r in candidates if abs(r["lead_hours"] - 24.0) <= band]
     if not in_band:
-        log_lines.append(f"  no candidates within +/-{LEAD_BAND_HOURS}h of T-24")
+        log_lines.append(f"  no candidates within +/-{band}h of T-24")
         return None, {"warnings": [], "errors": ["no_snapshot_in_band"], "tried_rows": 0}
 
     last_qc = None
@@ -324,11 +332,72 @@ def write_atomic(path, payload):
     os.replace(tmp, path)
 
 
+def _fmt_pct(p):
+    return f"{p * 100:.1f}%" if p is not None else "?"
+
+
+def _fmt_cents(x):
+    return f"{x * 100:+.1f}¢" if x is not None else "?"
+
+
+def _fmt_money(a):
+    return f"${a:.2f}" if a is not None else "?"
+
+
+def format_digest_event(ev):
+    """One event's 3-5 line block for the daily Pushover digest. Mirrors the
+    Predict-button summary the /t24 dashboard page shows."""
+    city = ev["city"]
+    top = ev.get("highest_probability")
+    by = ev.get("best_ev_yes")
+    bn = ev.get("best_ev_no")
+    lines = [f"== {city} =="]
+    if top:
+        lines.append(f"{top['subtitle']} ({_fmt_pct(top['prob'])})")
+        lines.append(
+            f"  Y@{_fmt_money(top.get('yes_ask'))} → {_fmt_cents(top.get('ev_yes'))}, "
+            f"N@{_fmt_money(top.get('no_ask'))} → {_fmt_cents(top.get('ev_no'))}"
+        )
+    else:
+        lines.append("(no top pick)")
+    if by and (not top or by.get("ticker") != top.get("ticker")):
+        lines.append(
+            f"Best EV YES: {by['subtitle']} @{_fmt_money(by.get('yes_ask'))} "
+            f"→ {_fmt_cents(by.get('ev_yes'))} (P={_fmt_pct(by.get('prob'))})"
+        )
+    if bn:
+        p_no = 1 - bn["prob"] if bn.get("prob") is not None else None
+        lines.append(
+            f"Best EV NO: {bn['subtitle']} @{_fmt_money(bn.get('no_ask'))} "
+            f"→ {_fmt_cents(bn.get('ev_no'))} (P_no={_fmt_pct(p_no)})"
+        )
+    warns = ev.get("qc", {}).get("warnings") or []
+    if warns:
+        lines.append("  [" + ", ".join(warns) + "]")
+    return "\n".join(lines)
+
+
+def build_digest_body(events):
+    """Assemble the full Pushover body from the archive's events list. Picks
+    are rendered per event; missing events are noted at the bottom."""
+    blocks, missing = [], []
+    for ev in events:
+        if ev.get("status") == "missing":
+            missing.append(f"{ev['city']} ({ev.get('reason')})")
+        else:
+            blocks.append(format_digest_event(ev))
+    body = "\n\n".join(blocks)
+    if missing:
+        body += "\n\nMissing: " + ", ".join(missing)
+    return body
+
+
 def maybe_pushover(qc_summary, events, today_iso, blocked=False):
-    """Fire one Pushover only if there are errors or a global block.
+    """Daily Pushover:
+      - blocked run (every event errored): short BLOCKED notice
+      - normal run (at least one event has picks): full digest of all picks,
+        with missing events listed at the bottom
     Quietly no-ops if pushover_config.json is absent (matches alerts.py)."""
-    if not blocked and qc_summary["errors"] == 0:
-        return
     try:
         from alerts import load_config, send_pushover
     except ImportError:
@@ -337,21 +406,122 @@ def maybe_pushover(qc_summary, events, today_iso, blocked=False):
     if cfg is None:
         return
     if blocked:
-        title = f"weatherbot T-24h QC: BLOCKED {today_iso}"
+        title = f"weatherbot T-24h: BLOCKED {today_iso}"
         body = "All events errored. Previous day's archive kept. See qc log."
     else:
-        title = f"weatherbot T-24h QC: {qc_summary['errors']} error(s)"
-        lines = []
-        for ev in events:
-            if ev.get("status") == "missing":
-                lines.append(f"{ev['city']}: {ev.get('reason')}")
-            elif ev.get("qc", {}).get("errors"):
-                lines.append(f"{ev['city']}: {', '.join(ev['qc']['errors'])}")
-        body = "\n".join(lines) if lines else "(no detail)"
+        title = f"weatherbot T-24h — {today_iso}"
+        body = build_digest_body(events)
+        if not body.strip():
+            return
     try:
-        send_pushover(title, body, cfg)
+        ok, resp = send_pushover(title, body, cfg)
+        if not ok:
+            print(f"[t24-card] pushover non-200: {resp[:200]}", file=sys.stderr)
     except Exception as e:
         print(f"[t24-card] pushover failed: {e}", file=sys.stderr)
+
+
+def _summarize_qc(events):
+    return {
+        "ok":       sum(1 for e in events if "status" not in e and not e["qc"]["warnings"]),
+        "warnings": sum(1 for e in events if "status" not in e and e["qc"]["warnings"]),
+        "errors":   sum(1 for e in events if e.get("status") == "missing"),
+    }
+
+
+def push_catchup(filled, today_iso):
+    """One Pushover summarizing newly-filled events from an hourly catch-up
+    run. Uses the same digest formatter as the morning report so the message
+    style stays consistent."""
+    try:
+        from alerts import load_config, send_pushover
+    except ImportError:
+        return
+    cfg = load_config()
+    if cfg is None:
+        return
+    cities = ", ".join(e["city"] for e in filled)
+    title = f"weatherbot T-24h catch-up — {cities}"
+    body = "Late-arriving picks (missed at 9 AM digest):\n\n" + build_digest_body(filled)
+    try:
+        ok, resp = send_pushover(title, body, cfg)
+        if not ok:
+            print(f"[t24-card] catchup pushover non-200: {resp[:200]}", file=sys.stderr)
+    except Exception as e:
+        print(f"[t24-card] catchup pushover failed: {e}", file=sys.stderr)
+
+
+def catchup(now=None):
+    """Hourly catch-up. For any series still marked 'missing' in today's
+    archive, try to resolve it with a wider lead band (LEAD_BAND_CATCHUP_HOURS)
+    against the latest snapshot log. If anything fills in, rewrite the
+    archive (events list + qc_summary + updated_at), append a catch-up log
+    line, and fire one Pushover with the newly-filled events.
+
+    Safe to call from snapshot.py after every hourly write: no-ops cleanly
+    when today's archive doesn't exist yet, has no missing events, or has
+    no new qualifying snapshots."""
+    now = now or datetime.now(timezone.utc)
+    today_iso = today_et(now)
+    archive_path = CARDS_DIR / f"{today_iso}.json"
+
+    if not archive_path.exists():
+        return []  # morning digest hasn't run yet
+
+    try:
+        archive = json.loads(archive_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[t24-card] catchup: archive read failed: {e}", file=sys.stderr)
+        return []
+
+    if not any(ev.get("status") == "missing" for ev in archive.get("events", [])):
+        return []  # nothing to fill
+
+    rows = list(read_log(LOG_PATH))
+    cands_by_series = candidates_for_today(rows, today_iso)
+
+    log_lines = [f"=== catchup for {today_iso} (run {now.isoformat()}) ==="]
+    new_events, filled = [], []
+    for ev in archive["events"]:
+        if ev.get("status") != "missing":
+            new_events.append(ev)
+            continue
+        series = ev["series"]
+        cands = cands_by_series.get(series, [])
+        if not cands:
+            log_lines.append(f"[{series}] no candidates yet")
+            new_events.append(ev)
+            continue
+        log_lines.append(f"[{series}]")
+        row, qc = pick_best_candidate(cands, now, log_lines, band=LEAD_BAND_CATCHUP_HOURS)
+        if row is None:
+            log_lines.append(f"  -> still missing")
+            new_events.append(ev)
+            continue
+        settled_bucket = latest_settled_bucket(rows, today_iso, series)
+        entry = build_event_entry(series, row, qc, settled_bucket)
+        entry["catchup_at"] = now.isoformat()
+        log_lines.append(f"  -> FILLED lead={row['lead_hours']:.2f}h "
+                         f"warnings={qc['warnings']} settled={bool(settled_bucket)}")
+        new_events.append(entry)
+        filled.append(entry)
+
+    cu_log_path = CARDS_DIR / f"catchup_{today_iso}.log"
+    with cu_log_path.open("a", encoding="utf-8") as f:
+        f.write("\n".join(log_lines) + "\n\n")
+
+    if not filled:
+        return []
+
+    archive["events"] = new_events
+    archive["updated_at"] = now.isoformat()
+    archive["qc_summary"] = _summarize_qc(new_events)
+    write_atomic(archive_path, archive)
+
+    print(f"[t24-card] catchup filled {len(filled)} event(s): "
+          f"{', '.join(e['city'] for e in filled)}", file=sys.stderr)
+    push_catchup(filled, today_iso)
+    return filled
 
 
 def main():
@@ -385,10 +555,8 @@ def main():
         )
         events.append(build_event_entry(series, row, qc, settled_bucket))
 
-    ok_count   = sum(1 for e in events if "status" not in e and not e["qc"]["warnings"])
-    warn_count = sum(1 for e in events if "status" not in e and e["qc"]["warnings"])
-    err_count  = sum(1 for e in events if e.get("status") == "missing")
-    qc_summary = {"ok": ok_count, "warnings": warn_count, "errors": err_count}
+    qc_summary = _summarize_qc(events)
+    ok_count, warn_count, err_count = qc_summary["ok"], qc_summary["warnings"], qc_summary["errors"]
     log_lines.append(f"qc_summary: {qc_summary}")
 
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -427,4 +595,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # Standalone CLI:
+    #   python generate_t24_card.py            -> full digest (default)
+    #   python generate_t24_card.py catchup    -> hourly catch-up only
+    if len(sys.argv) > 1 and sys.argv[1] == "catchup":
+        catchup()
+        sys.exit(0)
     sys.exit(main())

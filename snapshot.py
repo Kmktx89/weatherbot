@@ -103,6 +103,15 @@ def main() -> int:
     except Exception as e:
         print(f"[alerts] {e}", file=sys.stderr)
 
+    # Catch-up: if today's morning digest left any events as "missing", try
+    # to fill them now using this hour's snapshot. Fires its own Pushover
+    # only when something actually gets filled.
+    try:
+        from generate_t24_card import catchup
+        catchup()
+    except Exception as e:
+        print(f"[catchup] {e}", file=sys.stderr)
+
     return 0
 
 
