@@ -7,6 +7,11 @@ from . import configs as _configs
 from .compare import compare as run_compare
 from .data_cache import default as default_cache
 from .decompose import decompose as run_decompose
+from .live_calibration import (
+    LEAD_BINS, build_records as live_build_records,
+    calibrate_by_lead as live_calibrate_by_lead,
+    calibrate_live, read_log as live_read_log,
+)
 from .refit_bias import refit as run_refit
 from .replay import replay_many, summarize, summarize_both
 from .shadow_summary import summarize as run_shadow_summary
@@ -150,6 +155,61 @@ def cmd_shadow_summary(args):
         print(f"  Skips: " + ", ".join(f"{n}× {k}" for k, n in s["skips"].items()))
 
 
+def _fmt_cal(label: str, rep) -> str:
+    if rep.n_bets == 0:
+        return f"  {label}: no bets"
+    gap = (rep.realized_rate - rep.mean_pred) * 100
+    return (f"  {label}: n {rep.n_bets:>3}  pred {rep.mean_pred*100:>5.1f}%  "
+            f"realized {rep.realized_rate*100:>5.1f}%  gap {gap:+5.1f}pp  "
+            f"brier {rep.brier_score:.4f}")
+
+
+def cmd_live_calibration(args):
+    import dataclasses
+    rows = live_read_log(args.log, since_days=args.days)
+
+    if args.by_lead:
+        by_lead = live_calibrate_by_lead(rows)
+        if args.json:
+            print(json.dumps({
+                f"{int(lo)}-{hi}": {
+                    "n_events": v["n_events"],
+                    "yes": dataclasses.asdict(v["yes"]),
+                    "no": dataclasses.asdict(v["no"]),
+                } for (lo, hi), v in by_lead.items()
+            }, indent=2, default=str))
+            return
+        print(f"Live calibration by lead   log: {args.log}   days: {args.days}")
+        print("Backtest promised (frozen, no NWS/today_max): YES +8.8pp, NO -3.5pp")
+        for (lo, hi), v in by_lead.items():
+            hi_s = "inf" if hi == float("inf") else int(hi)
+            print(f"--- lead [{int(lo)}-{hi_s})h   events {v['n_events']} ---")
+            print(_fmt_cal("YES", v["yes"]))
+            print(_fmt_cal("NO ", v["no"]))
+        return
+
+    records, skips, leads = live_build_records(rows, target_lead=args.lead_target)
+    y = calibrate_live(records, "yes")
+    n = calibrate_live(records, "no")
+    mean_lead = sum(leads) / len(leads) if leads else 0.0
+    if args.json:
+        print(json.dumps({
+            "log": args.log, "days": args.days,
+            "target_lead": args.lead_target, "n_events": len(records),
+            "mean_actual_lead": mean_lead, "skips": skips,
+            "yes": dataclasses.asdict(y), "no": dataclasses.asdict(n),
+        }, indent=2, default=str))
+        return
+    print(f"Live calibration (live-today, sigma=1.0)   log: {args.log}   days: {args.days}")
+    print(f"Headline: per-event row nearest T-{args.lead_target:g}h   "
+          f"events {len(records)}   mean actual lead {mean_lead:.1f}h")
+    print(_fmt_cal("YES", y))
+    print(_fmt_cal("NO ", n))
+    print("Backtest promised (frozen, no NWS/today_max): YES +8.8pp, NO -3.5pp")
+    if skips:
+        print("  Skips: " + ", ".join(f"{v}× {k}" for k, v in skips.items()))
+
+
 def cmd_sweep(args):
     base = _configs.get(args.config)
     events = _resolve_events(args)
@@ -240,6 +300,17 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--days", type=int, default=14)
     ss.add_argument("--json", action="store_true")
     ss.set_defaults(func=cmd_shadow_summary)
+
+    lc = sub.add_parser("live-calibration",
+                        help="calibrate the live formula from live_picks_log.jsonl")
+    lc.add_argument("--days", type=int, default=14)
+    lc.add_argument("--log", default="live_picks_log.jsonl")
+    lc.add_argument("--lead-target", type=float, default=24.0,
+                    help="headline: per-event pred row nearest this lead (hours)")
+    lc.add_argument("--by-lead", action="store_true",
+                    help="bin all pred rows by lead instead of the per-event headline")
+    lc.add_argument("--json", action="store_true")
+    lc.set_defaults(func=cmd_live_calibration)
 
     sw = sub.add_parser("sweep", help="sweep a ModelConfig parameter (YES + NO)")
     sw.add_argument("--config", default="live-today",

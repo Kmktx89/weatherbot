@@ -1,6 +1,8 @@
 # Weatherbot model notes — consult before placing a bet
 
-**Last updated:** 2026-05-19 · **Current config:** `LIVE_TODAY` with `BASE_SIGMA=1.0`
+**Last updated:** 2026-05-26 · **Current config:** `LIVE_TODAY` with `BASE_SIGMA=1.0`
+
+> **2026-05-26 live-validation alert (read before any NO bet).** First calibration cut on 6 days of live data (n=49 events) is in: **YES is well-calibrated live (+0.6pp) — trust it.** **NO is ~8× more overconfident than the backtest claimed (live −29.8pp vs −3.5pp promised).** The NO adjustment table below is **pulled** pending the 06-03 cut; the NO *skip* rules are confirmed (and understated). **Stand down on NO bets** except printed prob ≥ 0.90, and size those as ~10pp thinner than printed. Full analysis: `docs/superpowers/reports/2026-05-26-sigma-validation.md`.
 
 This is the canonical quick-reference. Open it next to the dashboard.
 For the full analysis behind any rule below, see the linked report.
@@ -47,18 +49,18 @@ YES side is consistently a touch underconfident even after the σ=1.0 graduation
 
 The number shown is `1 − P_yes` for the bucket — i.e. the model's confidence that the bucket WON'T win. NO interpretation is **asymmetric** from YES: different selection rule, different "win" definition, different miscalibration profile.
 
-**Calibrated adjustment table:**
+**⚠ The backtest-derived "take" adjustments were pulled on 2026-05-26.** Live data (n=49) showed NO overconfident at *every* band — far more than the backtest claimed:
 
-| Printed prob | What to actually believe | Action |
-|---|---|---|
-| ≥ 90% | Subtract ~3 pp | Take if calibrated EV ≥ 5¢ |
-| 75-90% | Subtract ~3-5 pp | Take if calibrated EV ≥ 5¢ |
-| **60-75%** | — | **SKIP. Danger zone** — historically 30 pp overconfident in this bin |
-| < 60% | — | **SKIP. Model unreliable here** |
+| Printed prob | Live realized (n) | Live gap | Status |
+|---|---|---|---|
+| ≥ 90% | 86% (7) | −9.4pp | Take only here; size ~10pp thinner than printed |
+| 75-90% | 67% (18) | −16.0pp | **Marginal — small n, ~16pp overconfident. Avoid pending 06-03 cut** |
+| **60-75%** | 17% (12) | −52.4pp | **SKIP. Danger zone — confirmed lethal** |
+| < 60% | 0% (6) | −50.0pp | **SKIP. Model unreliable here — confirmed (0-for-6)** |
 
-**Decision:** True EV = (calibrated prob − `no_ask`). Take if ≥ 5¢, skip if < 5¢.
+Why: the NO strategy picks `argmax ev_no = (1 − P_yes) − no_ask`, which is largest exactly when `no_ask` is cheapest — i.e. when the *market* is most confident YES. So it systematically bets against the market's strongest convictions, and the sanity cap misses the cases where the model rates the bucket p_yes 0.5–0.6 (its own favorite) but no_ask is cheap. The market usually has intraday info the static forecast lacks.
 
-NO calibration is best far from close and degrades as you approach it (almost perfect at T-36h, badly overconfident at T-12h in replay). The σ=1.0 graduation tightened the residual gap but didn't eliminate it — danger zone still applies. The replay-measured leadtime gaps assume frozen forecasts; live drift may change the picture, which is what the hourly snapshotter (see "What's still TODO") is now measuring.
+**Until the NO selection is fixed and re-validated (see TODO):** take NO only at printed prob ≥ 0.90, size conservatively, skip everything else. Full analysis and the 06-03 re-run plan: `docs/superpowers/reports/2026-05-26-sigma-validation.md`.
 
 ---
 
@@ -131,7 +133,8 @@ Plus the spec at `docs/superpowers/specs/2026-05-19-weatherbot-model-lab-design.
 
 ## What's still TODO
 
-- **Forward-shadow validate σ=1.0** for two weeks. Shadow runner is wired; tail `shadow_picks.jsonl` and run `lab shadow-summary --config live-today --days 14` after enough data accrues.
+- **🔴 PRIORITY — fix the NO adverse-selection.** Live validation (2026-05-26) showed `argmax ev_no` systematically bets against the market's highest-confidence buckets; the sanity cap misses p_yes 0.5–0.6 contrarian bets. Options to spec + test against the live log (not the archive): (a) skip NO when `no_ask < ~0.20` regardless of p_yes; (b) require `p_yes ≤ 0.40` to surface any NO; (c) floor surfaced NO on printed prob ≥ 0.80; (d) `today_max_mode="truncate"` (drop the +0.3 push — `live-minus-push` had the best variant WR). See `2026-05-26-sigma-validation.md`.
+- **σ=1.0 forward validation — first cut DONE 2026-05-26** (`lab live-calibration`, n=49): YES validated (+0.6pp), NO failed the backtest promise (−29.8pp). **06-03 decision cut still pending** — re-run `python -m lab.cli live-calibration --days 14` (+ `--by-lead`) for tighter CIs before rewriting the NO "take" adjustments.
 - **Hourly LIVE_TODAY snapshotter** (`snapshot.py` → `live_picks_log.jsonl`) started 2026-05-20. Registered as Windows scheduled task `Weatherbot-Snapshot` (hourly, battery-tolerant, 5-min timeout). Writes one row per open event per fire with μ/σ, all bucket probs/EVs, market prices, and lead_hours against close. First calibration cut (live formula, lead-binned) usable after ~5 days of accrual (≈2026-05-25); two-week cut around 2026-06-03. The replay-based leadtime calibration in `prediction-calibration.md` measures only price-snapshot effects (forecasts are frozen in archive); this log measures live forecast drift too.
 - **Per-city σ refit** — DEN has sd=2.06 °F; might want city-specific σ. Sweep later.
 - **Live-formula BIAS refit** — current BIAS is calibrated for the no-NWS replay formula. With NWS overlay added live, residual bias may exist. Refit after 30 days of `nws_log.jsonl`.

@@ -65,13 +65,13 @@ def _bins(pairs: list[tuple[float, int]], n_bins: int = 10) -> list[CalibrationB
     return bins
 
 
-def calibrate(records: list[ReplayRecord], side: Literal["yes", "no"]) -> CalibrationReport:
-    pairs: list[tuple[float, int]] = []
-    for r in records:
-        o = getattr(r, side)
-        if o.pick_prob is None or o.won is None:
-            continue
-        pairs.append((o.pick_prob, 1 if o.won else 0))
+def report_from_pairs(side: Literal["yes", "no"],
+                      pairs: list[tuple[float, int]]) -> CalibrationReport:
+    """Build a CalibrationReport from (predicted_prob, won_int) pairs.
+
+    Shared by the replay-based `calibrate()` and the live-log
+    `lab.live_calibration` path so there is one calibration implementation.
+    """
     if not pairs:
         return CalibrationReport(side=side, n_bets=0, mean_pred=0.0,
                                  realized_rate=0.0, brier_score=0.0,
@@ -90,6 +90,16 @@ def calibrate(records: list[ReplayRecord], side: Literal["yes", "no"]) -> Calibr
         side=side, n_bets=n, mean_pred=mean_pred, realized_rate=realized,
         brier_score=brier, log_loss=log_loss, bins=_bins(pairs),
     )
+
+
+def calibrate(records: list[ReplayRecord], side: Literal["yes", "no"]) -> CalibrationReport:
+    pairs: list[tuple[float, int]] = []
+    for r in records:
+        o = getattr(r, side)
+        if o.pick_prob is None or o.won is None:
+            continue
+        pairs.append((o.pick_prob, 1 if o.won else 0))
+    return report_from_pairs(side, pairs)
 
 
 def calibrate_at_leads(events: Iterable[str], base_cfg: ModelConfig,
