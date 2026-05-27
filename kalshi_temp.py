@@ -1683,6 +1683,51 @@ SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly dis
 MIN_BEST_EV                 = 0.05   # hide 'best' suggestions whose edge is below 5¢
 MIN_PRINTED_NO              = 0.80   # only surface NO when model's own (1-p_yes) >= this
 
+# --- calibration params (haircut applied upstream of selection) ---
+# Per-side list of printed-prob bands -> haircut h (in probability points).
+# haircut = printed - realized: positive h = overconfident (shrink), negative
+# h = underconfident (raise). The authoritative values live in
+# calibration_params.json, written by `python -m lab.cli live-calibration
+# --emit-params`. This code default is PROVISIONAL (NO ~11pp from the 2026-05-26
+# n=49 cut; YES identity) and is superseded by the file when present. Refit the
+# file at the 2026-06-03 cut.
+DEFAULT_CAL_PARAMS = {
+    "no":  [{"lo": 0.80, "hi": 1.01, "h": 0.11}],
+    "yes": [{"lo": 0.00, "hi": 1.01, "h": 0.00}],
+}
+CAL_PARAMS_PATH = "calibration_params.json"
+
+
+def load_calibration_params(path=CAL_PARAMS_PATH):
+    """Load per-side haircut bands. Fall back to DEFAULT_CAL_PARAMS (and log)
+    if the file is absent or malformed."""
+    p = Path(path)
+    if not p.exists():
+        return DEFAULT_CAL_PARAMS
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        for side in ("yes", "no"):
+            assert isinstance(data.get(side), list)
+            for band in data[side]:
+                float(band["lo"]); float(band["hi"]); float(band["h"])
+        return data
+    except Exception as e:
+        print(f"[calibration] falling back to default params: {e}", file=sys.stderr)
+        return DEFAULT_CAL_PARAMS
+
+
+_CAL_PARAMS = load_calibration_params()
+
+
+def haircut_for(side, printed_prob, params=None):
+    """Haircut h for `side` at this printed probability; 0.0 if no band matches."""
+    params = params if params is not None else _CAL_PARAMS
+    for band in params.get(side, []):
+        if band["lo"] <= printed_prob < band["hi"]:
+            return float(band["h"])
+    return 0.0
+
 
 def _sanity_keep_no(market):
     """Suppress 'Best EV NO' suggestions when betting against a highly confident market.
