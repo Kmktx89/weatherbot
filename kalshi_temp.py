@@ -1729,6 +1729,40 @@ def haircut_for(side, printed_prob, params=None):
     return 0.0
 
 
+def _clamp01(x):
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+
+def apply_calibration(market, params=None):
+    """Add cal_prob_{yes,no} and cal_ev_{yes,no} to `market` in place,
+    computed from prob/yes_ask/no_ask in probability space.
+
+    Idempotent (cal_* never feed back in). Exact identity when a side's
+    haircut is 0: cal_prob == prob and cal_ev == ev bit-for-bit (no clamp,
+    no rounding) so a zero-haircut side cannot flip a borderline pick.
+    """
+    params = params if params is not None else _CAL_PARAMS
+    prob = market.get("prob")
+    ya = market.get("yes_ask")
+    na = market.get("no_ask")
+    if prob is None:
+        market["cal_prob_yes"] = None
+        market["cal_prob_no"] = None
+        market["cal_ev_yes"] = None
+        market["cal_ev_no"] = None
+        return market
+    printed_no = 1.0 - prob
+    h_yes = haircut_for("yes", prob, params)
+    h_no = haircut_for("no", printed_no, params)
+    cal_prob_yes = prob if h_yes == 0.0 else _clamp01(prob - h_yes)
+    cal_prob_no = printed_no if h_no == 0.0 else _clamp01(printed_no - h_no)
+    market["cal_prob_yes"] = cal_prob_yes
+    market["cal_prob_no"] = cal_prob_no
+    market["cal_ev_yes"] = (cal_prob_yes - ya) if ya not in (None, 0.0) else None
+    market["cal_ev_no"] = (cal_prob_no - na) if na not in (None, 0.0) else None
+    return market
+
+
 def _sanity_keep_no(market):
     """Suppress 'Best EV NO' suggestions when betting against a highly confident market.
 
