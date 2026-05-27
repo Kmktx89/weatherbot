@@ -189,6 +189,12 @@ def cmd_live_calibration(args):
         return
 
     records, skips, leads = live_build_records(rows, target_lead=args.lead_target)
+    if args.emit_params:
+        from .live_calibration import emit_params
+        params = emit_params(records, args.emit_params)
+        print(f"Wrote {args.emit_params}: NO h={params['no'][0]['h']:+.4f} "
+              f"(n={params['_meta']['n_no']}), YES identity")
+        return
     y = calibrate_live(records, "yes")
     n = calibrate_live(records, "no")
     mean_lead = sum(leads) / len(leads) if leads else 0.0
@@ -310,6 +316,9 @@ def build_parser() -> argparse.ArgumentParser:
     lc.add_argument("--by-lead", action="store_true",
                     help="bin all pred rows by lead instead of the per-event headline")
     lc.add_argument("--json", action="store_true")
+    lc.add_argument("--emit-params", metavar="PATH", nargs="?",
+                    const="calibration_params.json", default=None,
+                    help="write calibration_params.json from this cut and exit")
     lc.set_defaults(func=cmd_live_calibration)
 
     sw = sub.add_parser("sweep", help="sweep a ModelConfig parameter (YES + NO)")
