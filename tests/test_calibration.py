@@ -171,3 +171,23 @@ def test_alerts_has_no_private_calibration():
     import alerts
     assert not hasattr(alerts, "calibrate_no")
     assert not hasattr(alerts, "best_ev_no")
+
+
+# ---------- cmd_predict routes through predict_summary (consolidation) ----------
+
+def test_cmd_predict_json_uses_canonical_picks(monkeypatch, capsys):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    markets = [_mkt("TOP", prob=0.60, yes_ask=0.50, no_ask=0.45),
+               _mkt("NO", prob=0.05, yes_ask=0.06, no_ask=0.78)]
+    for m in markets:
+        m["subtitle"] = m["ticker"]
+    data = {"event_ticker": "E", "title": "t", "target_date": "2026-05-27",
+            "station": "s", "forecasts": {}, "model": {"mu": 70.0, "sigma": 1.0},
+            "settled": False, "settled_bucket": None, "markets": markets}
+    monkeypatch.setattr(kt, "fetch_event_and_markets", lambda et: ({"series_ticker": "KXHIGHNY"}, []))
+    monkeypatch.setattr(kt, "build_event_data", lambda ev, m: data)
+    args = type("A", (), {"event_ticker": "E", "json": True})()
+    kt.cmd_predict(args)
+    out = json.loads(capsys.readouterr().out)
+    assert out["best_ev_no"] is None or out["best_ev_no"]["ticker"] == "NO"
+    assert out["highest_probability"]["ticker"] == "TOP"

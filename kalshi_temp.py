@@ -831,15 +831,15 @@ function render(data) {
       <th>Bucket</th><th>Model P</th><th>YES bid</th><th>YES ask</th>
       <th>NO ask</th><th>EV (yes)</th><th>EV (no)</th><th>Vol 24h</th></tr></thead><tbody>`;
     for (const mk of ev.markets) {
-      const evMax = Math.max(mk.ev_yes ?? -1, mk.ev_no ?? -1);
+      const evMax = Math.max(mk.cal_ev_yes ?? -1, mk.cal_ev_no ?? -1);
       html += `<tr class="${evMax > 0.05 ? 'hi-row' : ''}">`;
       html += `<td class="bucket-name">${mk.subtitle}</td>`;
       html += `<td class="prob-cell"${probBg(mk.prob)}>${pct(mk.prob)}</td>`;
       html += `<td>${money(mk.yes_bid)}</td>`;
       html += `<td>${money(mk.yes_ask)}</td>`;
       html += `<td>${money(mk.no_ask)}</td>`;
-      html += `<td${evCellAttr(mk.ev_yes)}>${signed(mk.ev_yes)}</td>`;
-      html += `<td${evCellAttr(mk.ev_no)}>${signed(mk.ev_no)}</td>`;
+      html += `<td${evCellAttr(mk.cal_ev_yes)}>${signed(mk.cal_ev_yes)}</td>`;
+      html += `<td${evCellAttr(mk.cal_ev_no)}>${signed(mk.cal_ev_no)}</td>`;
       html += `<td class="dim">${mk.vol_24h ? mk.vol_24h.toFixed(0) : '—'}</td>`;
       html += `</tr>`;
     }
@@ -890,14 +890,14 @@ function renderPredict(d, out) {
   if (top) {
     html += `<div style="margin-top:0.5rem"><b>Highest probability:</b> ${top.subtitle} `
          + `(${(top.prob*100).toFixed(1)}%)<br>`
-         + `&nbsp;YES @ ${money(top.yes_ask)}  → <span class="${cls(top.ev_yes)}">${signed(top.ev_yes)}</span>, `
-         + `NO @ ${money(top.no_ask)}  → <span class="${cls(top.ev_no)}">${signed(top.ev_no)}</span></div>`;
+         + `&nbsp;YES @ ${money(top.yes_ask)}  → <span class="${cls(top.cal_ev_yes)}">${signed(top.cal_ev_yes)}</span>, `
+         + `NO @ ${money(top.no_ask)}  → <span class="${cls(top.cal_ev_no)}">${signed(top.cal_ev_no)}</span></div>`;
   }
   const by = d.best_ev_yes, bn = d.best_ev_no;
   if (by && (!top || by.ticker !== top.ticker))
-    html += `<div>Best EV YES: ${by.subtitle} @ ${money(by.yes_ask)} → <span class="${cls(by.ev_yes)}">${signed(by.ev_yes)}</span> (P=${(by.prob*100).toFixed(1)}%)</div>`;
+    html += `<div>Best EV YES: ${by.subtitle} @ ${money(by.yes_ask)} → <span class="${cls(by.cal_ev_yes)}">${signed(by.cal_ev_yes)}</span> (P=${(by.cal_prob_yes*100).toFixed(1)}%)</div>`;
   if (bn)
-    html += `<div>Best EV NO: ${bn.subtitle} @ ${money(bn.no_ask)} → <span class="${cls(bn.ev_no)}">${signed(bn.ev_no)}</span> (P_no=${((1-bn.prob)*100).toFixed(1)}%)</div>`;
+    html += `<div>Best EV NO: ${bn.subtitle} @ ${money(bn.no_ask)} → <span class="${cls(bn.cal_ev_no)}">${signed(bn.cal_ev_no)}</span> (P_no=${(bn.cal_prob_no*100).toFixed(1)}%)</div>`;
   out.innerHTML = html;
 }
 
@@ -1351,22 +1351,22 @@ function renderCard(ev) {
   if (top) {
     picks += `<div class="row pick">
       <span class="lbl">Highest probability</span>${top.subtitle} (${fmtPct(top.prob)})<br>
-      &nbsp;YES @ ${money(top.yes_ask)} → <span class="${cls(top.ev_yes)}">${fmtSign(top.ev_yes)}</span>,
-      NO @ ${money(top.no_ask)} → <span class="${cls(top.ev_no)}">${fmtSign(top.ev_no)}</span>
+      &nbsp;YES @ ${money(top.yes_ask)} → <span class="${cls(top.cal_ev_yes)}">${fmtSign(top.cal_ev_yes)}</span>,
+      NO @ ${money(top.no_ask)} → <span class="${cls(top.cal_ev_no)}">${fmtSign(top.cal_ev_no)}</span>
     </div>`;
   }
   if (by && (!top || by.ticker !== top.ticker)) {
     picks += `<div class="row pick">
       <span class="lbl">Best EV YES</span>${by.subtitle} @ ${money(by.yes_ask)} →
-      <span class="${cls(by.ev_yes)}">${fmtSign(by.ev_yes)}</span>
-      <span class="dim">(P=${fmtPct(by.prob)})</span>
+      <span class="${cls(by.cal_ev_yes)}">${fmtSign(by.cal_ev_yes)}</span>
+      <span class="dim">(P=${fmtPct(by.cal_prob_yes)})</span>
     </div>`;
   }
   if (bn) {
     picks += `<div class="row pick">
       <span class="lbl">Best EV NO</span>${bn.subtitle} @ ${money(bn.no_ask)} →
-      <span class="${cls(bn.ev_no)}">${fmtSign(bn.ev_no)}</span>
-      <span class="dim">(P_no=${fmtPct(1 - bn.prob)})</span>
+      <span class="${cls(bn.cal_ev_no)}">${fmtSign(bn.cal_ev_no)}</span>
+      <span class="dim">(P_no=${fmtPct(bn.cal_prob_no)})</span>
     </div>`;
   }
   if (!picks) {
@@ -1892,8 +1892,8 @@ def cmd_predict(args):
     if data is None:
         sys.exit(f"unsupported series: {ev['series_ticker']}")
 
-    probs = [m for m in data["markets"] if m.get("prob") is not None]
     f = data["forecasts"]
+    summary = predict_summary(data["markets"])
 
     if args.json:
         out = {
@@ -1905,10 +1905,9 @@ def cmd_predict(args):
             "model": data["model"],
             "settled": data["settled"],
             "settled_bucket": data["settled_bucket"],
-            "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
-            "best_ev_yes": (max((m for m in data["markets"] if m.get("ev_yes") is not None),
-                                key=lambda m: m["ev_yes"], default=None)),
-            "best_ev_no":  best_no_pick(data["markets"]),
+            "highest_probability": summary["highest_probability"],
+            "best_ev_yes": summary["best_ev_yes"],
+            "best_ev_no": summary["best_ev_no"],
             "markets": data["markets"],
         }
         print(json.dumps(out, indent=2))
@@ -1927,25 +1926,25 @@ def cmd_predict(args):
     if data["settled"]:
         print(f"SETTLED: {data['settled_bucket']}")
         return
-    if not probs:
+
+    top = summary["highest_probability"]
+    if top is None:
         return
 
-    top = max(probs, key=lambda m: m["prob"])
     print()
     print(f"Highest-probability bucket: {top['subtitle']}  ({top['prob']*100:.1f}%)")
     print(f"  ticker:   {top['ticker']}")
-    print(f"  YES ask:  ${_money(top['yes_ask'])}    EV: {_signed(top['ev_yes'])}")
-    print(f"  NO  ask:  ${_money(top['no_ask'])}     EV: {_signed(top['ev_no'])}")
+    print(f"  YES ask:  ${_money(top['yes_ask'])}    EV: {_signed(top['cal_ev_yes'])}")
+    print(f"  NO  ask:  ${_money(top['no_ask'])}     EV: {_signed(top['cal_ev_no'])}")
 
-    best_yes = max((m for m in data["markets"] if m.get("ev_yes") is not None),
-                   key=lambda m: m["ev_yes"], default=None)
-    best_no = best_no_pick(data["markets"])
+    best_yes = summary["best_ev_yes"]
+    best_no = summary["best_ev_no"]
     if best_yes and best_yes["ticker"] != top["ticker"]:
         print(f"Best EV YES: {best_yes['subtitle']} @ ${_money(best_yes['yes_ask'])} "
-              f"-> {_signed(best_yes['ev_yes'])} (model {best_yes['prob']*100:.1f}%)")
+              f"-> {_signed(best_yes['cal_ev_yes'])} (P {best_yes['cal_prob_yes']*100:.1f}%)")
     if best_no:
         print(f"Best EV NO:  {best_no['subtitle']} @ ${_money(best_no['no_ask'])} "
-              f"-> {_signed(best_no['ev_no'])} (model {(1-best_no['prob'])*100:.1f}% no)")
+              f"-> {_signed(best_no['cal_ev_no'])} (P_no {best_no['cal_prob_no']*100:.1f}%)")
 
 
 def _fmtf(v):  return "—" if v is None else f"{v:.1f}"
