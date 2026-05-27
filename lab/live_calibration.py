@@ -15,8 +15,8 @@ Per event:
     Note: build_event_data nulls out probs once an event settles, so the LATEST
     row for a settled event is unusable — we filter to pre-settlement rows.
   - YES pick = argmax(prob); won = pick.ticker == winner.
-  - NO  pick = argmax(ev_no) over buckets passing the live sanity cap + MIN_BEST_EV
-    (reused from kalshi_temp so the cut matches the dashboard); won = pick != winner.
+  - NO  pick = kalshi_temp.best_no_pick (argmax ev_no over buckets passing the
+    sanity cap + MIN_BEST_EV + printed-NO floor); won = pick != winner.
 
 `calibrate_live` gives the per-event headline (one obs per event at ~target lead);
 `calibrate_by_lead` bins ALL pred rows by lead to expose timing degradation
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import kalshi_temp as kt  # MIN_BEST_EV, _sanity_keep_no — mirror the live NO rule
+import kalshi_temp as kt  # best_no_pick — the canonical deployed NO rule
 
 from .calibration import CalibrationReport, report_from_pairs
 from .data_cache import default as default_cache
@@ -79,11 +79,11 @@ def _yes_pick(buckets: list[dict]) -> dict | None:
 
 
 def _no_pick(buckets: list[dict]) -> dict | None:
-    """Mirror kalshi_temp.predict_event's best_ev_no: MIN_BEST_EV floor + sanity cap."""
-    cand = [b for b in buckets
-            if b.get("ev_no") is not None and b["ev_no"] >= kt.MIN_BEST_EV
-            and kt._sanity_keep_no(b)]
-    return max(cand, key=lambda b: b["ev_no"]) if cand else None
+    """Delegate to the deployed canonical rule so the tool always measures what
+    the bot actually surfaces (kalshi_temp.best_no_pick: MIN_BEST_EV + sanity cap
+    + printed-NO floor). Re-scoring pre-fix logs under this rule reproduces the
+    candidate-C result in 2026-05-26-no-selection-fix.md."""
+    return kt.best_no_pick(buckets)
 
 
 def _winner_ticker(rows: list[dict], event_ticker: str, cache) -> str | None:

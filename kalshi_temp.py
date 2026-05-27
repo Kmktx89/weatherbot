@@ -1665,6 +1665,7 @@ def fetch_event_and_markets(event_ticker):
 SANITY_MARKET_CONFIDENT_YES = 0.85   # if yes_ask >= this, market is highly confident YES
 SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly disagrees
 MIN_BEST_EV                 = 0.05   # hide 'best' suggestions whose edge is below 5¢
+MIN_PRINTED_NO              = 0.80   # only surface NO when model's own (1-p_yes) >= this
 
 
 def _sanity_keep_no(market):
@@ -1682,6 +1683,28 @@ def _sanity_keep_no(market):
     if yes_ask >= SANITY_MARKET_CONFIDENT_YES and prob <= SANITY_MODEL_LOW_PROB:
         return False
     return True
+
+
+def best_no_pick(markets):
+    """Canonical 'Best EV NO' selection — the single source of truth for the
+    NO pick across the dashboard, CLI, T-24 card, and alerts.
+
+    A NO bet is `argmax ev_no` (the largest (1 - p_yes) - no_ask edge) subject to:
+      - ev_no >= MIN_BEST_EV          (edge worth taking)
+      - _sanity_keep_no               (don't fight a highly-confident market)
+      - (1 - prob) >= MIN_PRINTED_NO  (model itself must be confident the bucket
+                                       won't win — the printed-NO floor)
+
+    The printed-NO floor was added 2026-05-26 after live validation found the
+    unfloored rule adverse-selects against the market's highest-confidence
+    buckets (NO realized 46.5% vs claimed 76.3%, -29.8pp). The floor keeps only
+    high-conviction NO bets; see docs/superpowers/specs/2026-05-26-no-selection-fix.md.
+    """
+    cands = [m for m in markets
+             if m.get("ev_no") is not None and m["ev_no"] >= MIN_BEST_EV
+             and m.get("prob") is not None and _sanity_keep_no(m)
+             and (1 - m["prob"]) >= MIN_PRINTED_NO]
+    return max(cands, key=lambda m: m["ev_no"], default=None)
 
 
 def _log_nws_snapshot(data):
@@ -1727,10 +1750,7 @@ def predict_event(event_ticker):
         "best_ev_yes": max((m for m in data["markets"]
                             if m.get("ev_yes") is not None and m["ev_yes"] >= MIN_BEST_EV),
                            key=lambda m: m["ev_yes"], default=None),
-        "best_ev_no":  max((m for m in data["markets"]
-                            if m.get("ev_no") is not None and m["ev_no"] >= MIN_BEST_EV
-                            and _sanity_keep_no(m)),
-                           key=lambda m: m["ev_no"],  default=None),
+        "best_ev_no":  best_no_pick(data["markets"]),
         "markets": data["markets"],
     }
 
@@ -1760,8 +1780,7 @@ def cmd_predict(args):
             "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
             "best_ev_yes": (max((m for m in data["markets"] if m.get("ev_yes") is not None),
                                 key=lambda m: m["ev_yes"], default=None)),
-            "best_ev_no":  (max((m for m in data["markets"] if m.get("ev_no")  is not None),
-                                key=lambda m: m["ev_no"],  default=None)),
+            "best_ev_no":  best_no_pick(data["markets"]),
             "markets": data["markets"],
         }
         print(json.dumps(out, indent=2))
@@ -1792,8 +1811,7 @@ def cmd_predict(args):
 
     best_yes = max((m for m in data["markets"] if m.get("ev_yes") is not None),
                    key=lambda m: m["ev_yes"], default=None)
-    best_no = max((m for m in data["markets"] if m.get("ev_no") is not None),
-                  key=lambda m: m["ev_no"], default=None)
+    best_no = best_no_pick(data["markets"])
     if best_yes and best_yes["ticker"] != top["ticker"]:
         print(f"Best EV YES: {best_yes['subtitle']} @ ${_money(best_yes['yes_ask'])} "
               f"-> {_signed(best_yes['ev_yes'])} (model {best_yes['prob']*100:.1f}%)")

@@ -57,11 +57,13 @@ STALE_AFTER_HOURS = 36.0
 FORECAST_SPREAD_WARN = 15.0
 METAR_DIVERGE_WARN = 20.0
 
-# "Best bet" thresholds - mirror kalshi_temp.MIN_BEST_EV and _sanity_keep_no
-# so the card surfaces exactly the same picks the live Predict button would.
+# "Best bet" thresholds - mirror kalshi_temp.MIN_BEST_EV / _sanity_keep_no /
+# MIN_PRINTED_NO so the card surfaces exactly the same picks the live Predict
+# button would (kalshi_temp.best_no_pick).
 MIN_BEST_EV = 0.05
 SANITY_MARKET_CONFIDENT_YES = 0.85
 SANITY_MODEL_LOW_PROB = 0.40
+MIN_PRINTED_NO = 0.80   # printed-NO floor; see 2026-05-26-no-selection-fix.md
 
 
 def _sanity_keep_no(bucket):
@@ -90,7 +92,8 @@ def predict_summary(buckets):
     bn = max(
         (b for b in buckets
          if b.get("ev_no") is not None and b["ev_no"] >= MIN_BEST_EV
-         and _sanity_keep_no(b)),
+         and b.get("prob") is not None and _sanity_keep_no(b)
+         and (1 - b["prob"]) >= MIN_PRINTED_NO),
         key=lambda b: b["ev_no"], default=None)
     return {"highest_probability": top, "best_ev_yes": by, "best_ev_no": bn}
 

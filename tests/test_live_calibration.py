@@ -70,9 +70,9 @@ def test_no_pick_none_when_all_below_floor():
 
 def test_no_pick_sanity_cap_excludes_confident_market():
     # huge ev_no but market is confident YES (yes_ask>=0.85) and model says prob<=0.40
-    # -> excluded; the next eligible bucket wins instead.
+    # -> excluded; the next eligible bucket (printed-NO >= 0.80) wins instead.
     buckets = [bkt("CAP", "tail", prob=0.30, ev_no=0.50, yes_ask=0.90),
-               bkt("OK", "mid", prob=0.25, ev_no=0.08, yes_ask=0.20)]
+               bkt("OK", "mid", prob=0.15, ev_no=0.08, yes_ask=0.20)]  # printed-NO 0.85
     pick = lc._no_pick(buckets)
     assert pick["ticker"] == "OK"
 
@@ -80,6 +80,18 @@ def test_no_pick_sanity_cap_excludes_confident_market():
 def test_no_pick_none_when_only_capped_bucket():
     buckets = [bkt("CAP", "tail", prob=0.30, ev_no=0.50, yes_ask=0.90)]
     assert lc._no_pick(buckets) is None
+
+
+def test_no_pick_printed_floor_excludes_low_conviction():
+    # printed-NO = 1 - 0.25 = 0.75 < 0.80 floor -> excluded even though ev_no is fat
+    buckets = [bkt("LOWCONV", "mid", prob=0.25, ev_no=0.40, yes_ask=0.20)]
+    assert lc._no_pick(buckets) is None
+
+
+def test_no_pick_printed_floor_keeps_high_conviction():
+    # printed-NO = 1 - 0.15 = 0.85 >= 0.80 floor -> kept
+    buckets = [bkt("HICONV", "tail", prob=0.15, ev_no=0.10, yes_ask=0.10)]
+    assert lc._no_pick(buckets)["ticker"] == "HICONV"
 
 
 # --- winner resolution: log subtitle -> ticker ----------------------------

@@ -209,21 +209,35 @@ def test_predict_summary_sanity_filter_drops_confident_no():
     assert s["best_ev_no"] is None  # sanity-filtered
 
 
+def test_predict_summary_printed_no_floor_drops_low_conviction():
+    # Default top NO ("67° or below") has printed-NO = 1 - 0.576 = 0.424 < 0.80,
+    # so the printed-NO floor drops it and no NO pick surfaces.
+    row = make_row()
+    s = t24.predict_summary(row["buckets"])
+    assert s["best_ev_no"] is None
+
+
 def test_predict_summary_matches_predict_event_logic():
     # Build a row, then compare predict_summary output against the inline
-    # logic predict_event uses in kalshi_temp.py.
+    # logic predict_event uses in kalshi_temp.py (incl. the printed-NO floor).
     row = make_row()
     bs = row["buckets"]
+    # add a high-conviction NO bucket that survives the printed-NO >= 0.80 floor
+    bs.append({"ticker": "X-DEEP", "subtitle": "deep tail",
+               "yes_bid": 0.04, "yes_ask": 0.05, "no_bid": 0.95, "no_ask": 0.95,
+               "prob": 0.10, "ev_yes": -0.04, "ev_no": 0.07, "volume_24h": 1000})
     expected_top = max(bs, key=lambda b: b["prob"])
     expected_by  = max((b for b in bs if b["ev_yes"] >= 0.05),
                        key=lambda b: b["ev_yes"], default=None)
     expected_bn  = max((b for b in bs if b["ev_no"]  >= 0.05
-                        and not (b["yes_ask"] >= 0.85 and b["prob"] <= 0.40)),
+                        and not (b["yes_ask"] >= 0.85 and b["prob"] <= 0.40)
+                        and (1 - b["prob"]) >= 0.80),
                        key=lambda b: b["ev_no"],  default=None)
     s = t24.predict_summary(bs)
     assert s["highest_probability"] == expected_top
     assert s["best_ev_yes"]         == expected_by
     assert s["best_ev_no"]          == expected_bn
+    assert s["best_ev_no"]["ticker"] == "X-DEEP"  # the floor-surviving pick
 
 
 # -------- pick_best_candidate fallback --------

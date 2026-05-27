@@ -88,6 +88,10 @@ def best_yes(buckets: list[dict]) -> dict | None:
     return max(cs, key=lambda b: b["prob"]) if cs else None
 
 
+MIN_PRINTED_NO = 0.80   # printed-NO floor; mirrors kalshi_temp.best_no_pick
+                        # (2026-05-26-no-selection-fix.md)
+
+
 def best_ev_no(buckets: list[dict],
                sanity_yes_ask_min: float = 0.85,
                sanity_prob_max: float = 0.40) -> dict | None:
@@ -97,6 +101,8 @@ def best_ev_no(buckets: list[dict],
         if prob is None or ya is None or ev is None:
             continue
         if ya >= sanity_yes_ask_min and prob <= sanity_prob_max:
+            continue
+        if (1 - prob) < MIN_PRINTED_NO:   # printed-NO floor — drop low-conviction NO
             continue
         cs.append(b)
     return max(cs, key=lambda b: b["ev_no"]) if cs else None
