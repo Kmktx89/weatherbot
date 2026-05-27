@@ -5,11 +5,26 @@ from lab.calibration import report_from_pairs
 from lab import live_calibration as lc
 
 
+@pytest.fixture(autouse=True)
+def _identity_calibration(monkeypatch):
+    """These tests verify NO-pick selection mechanics, not the (provisional)
+    production haircut. Pin calibration to identity so cal_ev_no == ev_no and
+    best_no_pick reduces to its pre-calibration selection behavior."""
+    identity = {"no": [{"lo": 0.0, "hi": 1.01, "h": 0.0}],
+                "yes": [{"lo": 0.0, "hi": 1.01, "h": 0.0}]}
+    monkeypatch.setattr(kt, "_CAL_PARAMS", identity)
+
+
 # --- fixtures -------------------------------------------------------------
 
 def bkt(ticker, subtitle, *, prob=None, ev_no=None, yes_ask=None):
+    # Real rows always carry no_ask, and ev_no = (1 - prob) - no_ask. The new
+    # best_no_pick derives cal_ev_no from no_ask, so reconstruct a consistent
+    # no_ask from the test's stated prob/ev_no (under the identity calibration
+    # fixture below, cal_ev_no == ev_no exactly).
+    no_ask = None if (prob is None or ev_no is None) else (1 - prob) - ev_no
     return {"ticker": ticker, "subtitle": subtitle, "prob": prob,
-            "ev_no": ev_no, "ev_yes": None, "yes_ask": yes_ask}
+            "ev_no": ev_no, "ev_yes": None, "yes_ask": yes_ask, "no_ask": no_ask}
 
 
 def row(event, lead, buckets, *, settled_bucket=None, ts="2026-05-25T00:00:00+00:00"):
