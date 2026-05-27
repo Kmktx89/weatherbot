@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import requests
+
 import kalshi_temp as kt
 
 
@@ -67,7 +68,6 @@ def _fmt_signed_cents(x: float | None) -> str:
 
 def format_card(row: dict) -> str:
     """5-line text card for one event row from live_picks_log.jsonl."""
-    et = row.get("event_ticker", "?")
     series = (row.get("series") or "").replace("KXHIGH", "")
     target = row.get("target_date", "?")
     lead = row.get("lead_hours")
@@ -91,6 +91,8 @@ def format_card(row: dict) -> str:
         cal_p = yes["cal_prob_yes"]
         ya = yes.get("yes_ask")
         cal_ev = yes["cal_ev_yes"]
+        # SKIP-thin is a guard for if TAKE_EV_THRESHOLD is ever raised above
+        # MIN_BEST_EV; today they're equal so surfaced picks are always TAKE.
         action = "TAKE" if (cal_ev is not None and cal_ev >= TAKE_EV_THRESHOLD) else "SKIP-thin"
         lines.append(f"YES {yes['subtitle']}  {_fmt_pct(p)}→{_fmt_pct(cal_p)}  "
                      f"ask{_fmt_pct(ya)}  EV{_fmt_signed_cents(cal_ev)}¢  {action}")
