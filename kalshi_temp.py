@@ -108,21 +108,37 @@ KALSHI_MIN_GAP = 0.25  # seconds
 
 
 def kalshi_get(path, params=None):
-    """GET against Kalshi with simple rate-limit + 429 retry."""
+    """GET against Kalshi with simple rate-limit, 429 retry, and
+    connection/DNS-error retry with backoff.
+
+    Transient DNS failures (getaddrinfo / NameResolutionError, which
+    subclasses ConnectionError) and connection timeouts were previously not
+    retried here, so a single blip dropped a city's rows for the whole
+    snapshot run and could block that day's T-24 card. Retry those the same
+    way as a 429, re-raising the last error only if every attempt failed."""
     global _kalshi_last_call
     url = f"{KALSHI}{path}"
+    last_exc = None
     for attempt in range(3):
         with _kalshi_lock:
             wait = KALSHI_MIN_GAP - (time.time() - _kalshi_last_call)
             if wait > 0:
                 time.sleep(wait)
             _kalshi_last_call = time.time()
-        r = session.get(url, params=params, timeout=15)
+        try:
+            r = session.get(url, params=params, timeout=15)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last_exc = e
+            time.sleep(1.0 * (attempt + 1))
+            continue
         if r.status_code == 429:
             time.sleep(1.0 * (attempt + 1))
             continue
         r.raise_for_status()
         return r.json()
+    if last_exc is not None:
+        raise last_exc
     r.raise_for_status()
     return r.json()
 
