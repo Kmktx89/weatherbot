@@ -1,10 +1,10 @@
 # Weatherbot model notes — consult before placing a bet
 
-**Last updated:** 2026-05-26 · **Current config:** `LIVE_TODAY` with `BASE_SIGMA=1.0`
+**Last updated:** 2026-05-27 · **Current config:** `LIVE_TODAY`, `BASE_SIGMA=1.0`, calibration layer live (NO haircut applied upstream of selection)
 
-> **2026-05-26 live-validation alert (read before any NO bet).** First calibration cut on 6 days of live data (n=49 events): **YES is well-calibrated live (+0.6pp) — trust it.** **NO was ~8× more overconfident than the backtest claimed (live −29.8pp vs −3.5pp promised).** The NO adjustment table below is **pulled** pending the 06-03 cut.
+> **2026-05-27 — NO calibration shipped & deployed.** The NO adverse-selection fix is live. Two things now protect the NO side: the **printed-NO ≥ 0.80 selection floor** AND a **calibration haircut applied upstream of pick selection** — `kalshi_temp.best_no_pick` ranks on `cal_ev_no` (calibrated), not raw `ev_no`, so structurally negative-EV NO picks no longer surface anywhere. Every surface (dashboard, Predict tool, T-24 card, alerts, CLI) now **displays the calibrated `cal_prob_no` / `cal_ev_no` directly** — read the printed number at face value instead of applying a mental haircut. Merged to `model-lab` (`d18f855`), dashboard restarted 2026-05-27. Design: `docs/superpowers/specs/2026-05-27-no-calibrated-ev-selection-design.md`.
 >
-> **Fix committed (deploy pending restart):** a printed-NO ≥ 0.80 selection floor (`kalshi_temp.best_no_pick`) now drops the low-conviction NO picks that caused the damage — on the live log it lifts NO realized 46.5% → 77.8% and the gap −29.8pp → −11.1pp (candidate C, `2026-05-26-no-selection-fix.md`). **This is inert until you restart the server; the currently-running dashboard still shows the old, dangerous NO picks.** Until restart, stand down on NO except printed prob ≥ 0.90 sized ~10pp thinner. After restart, the dashboard surfaces only printed-NO ≥ 0.80 picks (still ~11pp overconfident — size conservatively). Full analysis: `docs/superpowers/reports/2026-05-26-sigma-validation.md`.
+> **The haircut magnitude is PROVISIONAL.** NO defaults to **0.11** (code default `DEFAULT_CAL_PARAMS` in `kalshi_temp.py`), superseded by `calibration_params.json` when present. The authoritative value comes from the **06-03 two-week cut**: `python -m lab.cli live-calibration --days 14 --emit-params` then restart. A current floored-subset cut (n=15, 05-27) measures ~0.205, but n is too thin to commit. **Size NO conservatively until 06-03.** Validation context: `docs/superpowers/reports/2026-05-26-sigma-validation.md`.
 
 This is the canonical quick-reference. Open it next to the dashboard.
 For the full analysis behind any rule below, see the linked report.
@@ -23,6 +23,9 @@ For the full analysis behind any rule below, see the linked report.
 | `sanity_no_yes_ask_min` | 0.85 | Skip NO bet if market is this confident YES |
 | `sanity_no_prob_max` | 0.40 | …and model thinks the bucket is this unlikely |
 | `decision_lead_hours` | 24.0 | Used by `cmd_backtest` only; live dashboard recomputes per refresh |
+| `MIN_PRINTED_NO` | 0.80 | Printed-NO floor: only surface a NO pick when model's `1 − P_yes` ≥ this |
+| NO haircut | **0.11** (provisional) | Probability haircut applied upstream of selection (`apply_calibration`). From `calibration_params.json` (lab-emitted) or `DEFAULT_CAL_PARAMS`. Refit at 06-03 via `lab ... --emit-params`. |
+| YES haircut | 0.0 (identity) | Machinery present but off — YES is ~unbiased; exact passthrough so YES picks are unchanged. |
 
 Per-city `BIAS` and `SOURCE_WEIGHTS` in `kalshi_temp.py`. Were refit 2026-05-19, deltas within 0.3 °F of prior values — already correct for the backtest formula.
 
@@ -45,24 +48,24 @@ The dashboard shows the model's probability mass for that bucket. **It is NOT th
 
 YES side is consistently a touch underconfident even after the σ=1.0 graduation. Source: `2026-05-19-prediction-calibration.md`.
 
+**Note on the calibration layer:** YES runs at **identity haircut (0)**, so the dashboard's displayed YES `cal_prob_yes`/`cal_ev_yes` equal the raw values — this table is still a *mental* adjustment you apply. (NO, by contrast, has the haircut baked into the displayed number — see below.) Turning the YES haircut on to fold this table into the display is deferred; YES is mild and well-behaved.
+
 ---
 
 ## How to read a NO pick (best-EV-NO bucket)
 
-The number shown is `1 − P_yes` for the bucket — i.e. the model's confidence that the bucket WON'T win. NO interpretation is **asymmetric** from YES: different selection rule, different "win" definition, different miscalibration profile.
+**As of 2026-05-27 the calibration is in-product — the displayed NO number is already calibrated.** The dashboard / Predict tool / T-24 card / alerts now show `cal_prob_no` and `cal_ev_no`, i.e. the model's NO confidence **after** the provisional 0.11 haircut. So read the printed NO EV/prob roughly at face value — you are no longer applying a mental adjustment. The old "pulled band table" is gone: the haircut lives in the number you see, not in your head.
 
-**⚠ The backtest-derived "take" adjustments were pulled on 2026-05-26.** Live data (n=49) showed NO overconfident at *every* band — far more than the backtest claimed:
+**What `best_no_pick` enforces before a NO pick surfaces** (all three; structurally negative-EV picks are dropped):
+- `cal_ev_no ≥ 0.05` — calibrated edge ≥ 5¢ (this is the haircut-adjusted EV, so a raw +7¢ that calibrates to −4¢ never appears)
+- `(1 − P_yes) ≥ 0.80` — printed-NO floor (model's own pre-haircut conviction)
+- sanity cap — not fighting a market at `yes_ask ≥ 0.85` while the model rates the bucket `≤ 0.40`
 
-| Printed prob | Live realized (n) | Live gap | Status |
-|---|---|---|---|
-| ≥ 90% | 86% (7) | −9.4pp | Take only here; size ~10pp thinner than printed |
-| 75-90% | 67% (18) | −16.0pp | **Marginal — small n, ~16pp overconfident. Avoid pending 06-03 cut** |
-| **60-75%** | 17% (12) | −52.4pp | **SKIP. Danger zone — confirmed lethal** |
-| < 60% | 0% (6) | −50.0pp | **SKIP. Model unreliable here — confirmed (0-for-6)** |
+**Decision:** if a NO pick is shown, its displayed `cal_ev_no` is the edge — take if it's comfortably positive, **size conservatively** (the 0.11 magnitude is provisional, n=15, wide CI — see banner). If no NO pick is shown, there is no qualifying NO bet; do not hunt for one.
 
-Why: the NO strategy picks `argmax ev_no = (1 − P_yes) − no_ask`, which is largest exactly when `no_ask` is cheapest — i.e. when the *market* is most confident YES. So it systematically bets against the market's strongest convictions, and the sanity cap misses the cases where the model rates the bucket p_yes 0.5–0.6 (its own favorite) but no_ask is cheap. The market usually has intraday info the static forecast lacks.
+**Why the haircut matters (the original failure):** the NO strategy picks `argmax ev_no = (1 − P_yes) − no_ask`, largest exactly when `no_ask` is cheapest — i.e. when the *market* is most confident YES. So it systematically bets against the market's strongest convictions (live n=49: NO realized 46.5% vs 76.3% claimed, −29.8pp). The floor + upstream haircut together remove those structurally-bad picks. Full history: `docs/superpowers/reports/2026-05-26-sigma-validation.md`; design: `docs/superpowers/specs/2026-05-27-no-calibrated-ev-selection-design.md`.
 
-**Until the NO selection is fixed and re-validated (see TODO):** take NO only at printed prob ≥ 0.90, size conservatively, skip everything else. Full analysis and the 06-03 re-run plan: `docs/superpowers/reports/2026-05-26-sigma-validation.md`.
+**Caveat — the haircut is lead-anchored at T-24h.** The 0.11 (and the 06-03 refit) measure the gap at ~T-24h. NO miscalibration is worse closer to close; make the NO decision in the T-36h–T-24h window and treat a NO pick read at T-12h-and-in as a different, worse regime.
 
 ---
 
@@ -135,8 +138,8 @@ Plus the spec at `docs/superpowers/specs/2026-05-19-weatherbot-model-lab-design.
 
 ## What's still TODO
 
-- **NO adverse-selection — selection fix DONE 2026-05-26 (deploy pending restart).** Added a printed-NO ≥ 0.80 floor + centralized `kalshi_temp.best_no_pick` (candidate C; lifts live NO realized to 77.8%, gap −11.1pp). Spec: `2026-05-26-no-selection-fix.md`. **Remaining:** (a) recalibrate the ≥0.80 adjustment pp values at the 06-03 cut (still ~11pp overconfident); (b) test `today_max_mode="truncate"` (drop the +0.3 push — `live-minus-push` had the best variant WR); (c) `alerts.calibrate_no` adjustment numbers still stale, await 06-03.
-- **σ=1.0 forward validation — first cut DONE 2026-05-26** (`lab live-calibration`, n=49): YES validated (+0.6pp), NO failed the backtest promise (−29.8pp). **06-03 decision cut still pending** — re-run `python -m lab.cli live-calibration --days 14` (+ `--by-lead`) for tighter CIs before rewriting the NO "take" adjustments.
+- **NO adverse-selection — ARCHITECTURE DONE & DEPLOYED 2026-05-27.** Calibration now runs upstream of selection: one `apply_calibration` adds `cal_*` fields, `best_no_pick`/`best_yes_pick`/`predict_summary` rank on calibrated EV, the three duplicated selection copies are collapsed into the canonical `kalshi_temp` functions, and every surface displays `cal_*`. Haircut sourced from `calibration_params.json` + code default (no magic numbers committed). Merged `d18f855`, dashboard restarted. Spec: `2026-05-27-no-calibrated-ev-selection-design.md`; plan: `docs/superpowers/plans/2026-05-27-no-calibrated-ev-selection.md`. **Remaining (magnitude only):** (a) **06-03 refit** — `python -m lab.cli live-calibration --days 14 --emit-params` to replace the provisional 0.11 NO default with the two-week cut, then restart; (b) consider banding (0.80-0.90 vs ≥0.90) and a lead dimension once n supports it; (c) test `today_max_mode="truncate"` (drop the +0.3 push — `live-minus-push` had the best variant WR).
+- **σ=1.0 forward validation — first cut DONE 2026-05-26** (`lab live-calibration`, n=49): YES validated (+0.6pp), NO failed the backtest promise (−29.8pp). **06-03 decision cut still pending** — re-run `python -m lab.cli live-calibration --days 14` (+ `--by-lead`, + `--emit-params` to deploy the refit) for tighter CIs. The NO "take" numbers are now data (`calibration_params.json`), not a doc table — the refit is a one-command emit + restart, no code edit.
 - **Hourly LIVE_TODAY snapshotter** (`snapshot.py` → `live_picks_log.jsonl`) started 2026-05-20. Registered as Windows scheduled task `Weatherbot-Snapshot` (hourly, battery-tolerant, 5-min timeout). Writes one row per open event per fire with μ/σ, all bucket probs/EVs, market prices, and lead_hours against close. First calibration cut (live formula, lead-binned) usable after ~5 days of accrual (≈2026-05-25); two-week cut around 2026-06-03. The replay-based leadtime calibration in `prediction-calibration.md` measures only price-snapshot effects (forecasts are frozen in archive); this log measures live forecast drift too.
 - **Per-city σ refit** — DEN has sd=2.06 °F; might want city-specific σ. Sweep later.
 - **Live-formula BIAS refit** — current BIAS is calibrated for the no-NWS replay formula. With NWS overlay added live, residual bias may exist. Refit after 30 days of `nws_log.jsonl`.
