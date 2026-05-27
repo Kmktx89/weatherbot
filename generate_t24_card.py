@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import kalshi_temp as kt
+
 
 CARDS_DIR = Path("t24_cards")
 LOG_PATH = Path("live_picks_log.jsonl")
@@ -56,47 +58,6 @@ PROB_SUM_BAND = (0.95, 1.05)
 STALE_AFTER_HOURS = 36.0
 FORECAST_SPREAD_WARN = 15.0
 METAR_DIVERGE_WARN = 20.0
-
-# "Best bet" thresholds - mirror kalshi_temp.MIN_BEST_EV / _sanity_keep_no /
-# MIN_PRINTED_NO so the card surfaces exactly the same picks the live Predict
-# button would (kalshi_temp.best_no_pick).
-MIN_BEST_EV = 0.05
-SANITY_MARKET_CONFIDENT_YES = 0.85
-SANITY_MODEL_LOW_PROB = 0.40
-MIN_PRINTED_NO = 0.80   # printed-NO floor; see 2026-05-26-no-selection-fix.md
-
-
-def _sanity_keep_no(bucket):
-    """Suppress Best-EV-NO when market is highly confident YES and model
-    strongly disagrees - mirrors kalshi_temp._sanity_keep_no."""
-    ya = bucket.get("yes_ask")
-    p = bucket.get("prob")
-    if ya is None or p is None:
-        return True
-    if ya >= SANITY_MARKET_CONFIDENT_YES and p <= SANITY_MODEL_LOW_PROB:
-        return False
-    return True
-
-
-def predict_summary(buckets):
-    """Return {highest_probability, best_ev_yes, best_ev_no} - the exact same
-    derived picks the live Predict button surfaces (predict_event in
-    kalshi_temp.py:1696). Returns None for any pick that doesn't meet the
-    MIN_BEST_EV or sanity threshold."""
-    probs = [b for b in buckets if b.get("prob") is not None]
-    top = max(probs, key=lambda b: b["prob"]) if probs else None
-    by = max(
-        (b for b in buckets
-         if b.get("ev_yes") is not None and b["ev_yes"] >= MIN_BEST_EV),
-        key=lambda b: b["ev_yes"], default=None)
-    bn = max(
-        (b for b in buckets
-         if b.get("ev_no") is not None and b["ev_no"] >= MIN_BEST_EV
-         and b.get("prob") is not None and _sanity_keep_no(b)
-         and (1 - b["prob"]) >= MIN_PRINTED_NO),
-        key=lambda b: b["ev_no"], default=None)
-    return {"highest_probability": top, "best_ev_yes": by, "best_ev_no": bn}
-
 
 def today_et(now=None):
     """Today's calendar date in America/New_York as ISO string."""
@@ -299,7 +260,7 @@ def build_event_entry(series, row, qc, settled_bucket):
     Raw buckets are kept too for cross-checking and future re-renders.
     """
     buckets = row.get("buckets") or []
-    summary = predict_summary(buckets)
+    summary = kt.predict_summary(buckets)
     return {
         "series": series,
         "city": SERIES_CITY[series],
@@ -358,21 +319,20 @@ def format_digest_event(ev):
     if top:
         lines.append(f"{top['subtitle']} ({_fmt_pct(top['prob'])})")
         lines.append(
-            f"  Y@{_fmt_money(top.get('yes_ask'))} → {_fmt_cents(top.get('ev_yes'))}, "
-            f"N@{_fmt_money(top.get('no_ask'))} → {_fmt_cents(top.get('ev_no'))}"
+            f"  Y@{_fmt_money(top.get('yes_ask'))} → {_fmt_cents(top.get('cal_ev_yes'))}, "
+            f"N@{_fmt_money(top.get('no_ask'))} → {_fmt_cents(top.get('cal_ev_no'))}"
         )
     else:
         lines.append("(no top pick)")
     if by and (not top or by.get("ticker") != top.get("ticker")):
         lines.append(
             f"Best EV YES: {by['subtitle']} @{_fmt_money(by.get('yes_ask'))} "
-            f"→ {_fmt_cents(by.get('ev_yes'))} (P={_fmt_pct(by.get('prob'))})"
+            f"→ {_fmt_cents(by.get('cal_ev_yes'))} (P={_fmt_pct(by.get('cal_prob_yes'))})"
         )
     if bn:
-        p_no = 1 - bn["prob"] if bn.get("prob") is not None else None
         lines.append(
             f"Best EV NO: {bn['subtitle']} @{_fmt_money(bn.get('no_ask'))} "
-            f"→ {_fmt_cents(bn.get('ev_no'))} (P_no={_fmt_pct(p_no)})"
+            f"→ {_fmt_cents(bn.get('cal_ev_no'))} (P_no={_fmt_pct(bn.get('cal_prob_no'))})"
         )
     warns = ev.get("qc", {}).get("warnings") or []
     if warns:
