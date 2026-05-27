@@ -472,6 +472,7 @@ def build_event_data(ev, markets):
                 print(f"[shadow] {e}", file=sys.stderr)
 
     out_markets.sort(key=lambda x: x["_sort"])
+    finalize_markets(out_markets)
     return {
         "event_ticker": ev["event_ticker"],
         "title": ev.get("title") or ev["event_ticker"],
@@ -1761,6 +1762,14 @@ def apply_calibration(market, params=None):
     market["cal_ev_yes"] = (cal_prob_yes - ya) if ya not in (None, 0.0) else None
     market["cal_ev_no"] = (cal_prob_no - na) if na not in (None, 0.0) else None
     return market
+
+
+def finalize_markets(markets, params=None):
+    """Apply calibration to every market in a list (in place). Used to finalize
+    build_event_data output so cal_* ship with the live dashboard and snapshots."""
+    for m in markets:
+        apply_calibration(m, params)
+    return markets
 
 
 def _sanity_keep_no(market):

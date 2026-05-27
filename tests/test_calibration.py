@@ -138,3 +138,14 @@ def test_predict_summary_shape_and_picks(monkeypatch):
 def test_predict_summary_empty_markets():
     s = kt.predict_summary([])
     assert s == {"highest_probability": None, "best_ev_yes": None, "best_ev_no": None}
+
+
+# ---------- finalize maps apply_calibration over a markets list ----------
+
+def test_finalize_markets_adds_cal_fields(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    markets = [_mkt("A", 0.11, 0.13, 0.82), {"ticker": "S", "prob": None,
+               "yes_ask": None, "no_ask": None}]
+    kt.finalize_markets(markets)
+    assert "cal_ev_no" in markets[0] and markets[0]["cal_ev_no"] is not None
+    assert markets[1]["cal_ev_no"] is None  # settled/None-prob row tolerated

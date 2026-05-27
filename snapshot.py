@@ -43,6 +43,10 @@ def _bucket(b: dict, raw: dict) -> dict:
         "prob": b.get("prob"),
         "ev_yes": b.get("ev_yes"),
         "ev_no": b.get("ev_no"),
+        "cal_prob_yes": b.get("cal_prob_yes"),
+        "cal_prob_no": b.get("cal_prob_no"),
+        "cal_ev_yes": b.get("cal_ev_yes"),
+        "cal_ev_no": b.get("cal_ev_no"),
         "volume_24h": b.get("vol_24h"),
     }
 
