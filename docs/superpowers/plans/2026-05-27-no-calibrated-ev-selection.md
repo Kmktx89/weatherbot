@@ -902,6 +902,7 @@ Expected: prints the YES/NO headline without error (proves `best_no_pick` re-sco
 
 Run: `python -m lab.cli live-calibration --days 14 --emit-params`
 Expected: prints `Wrote calibration_params.json: NO h=...`; the file is created and gitignored.
+Note: the emitted `h` will differ from the 0.11 default and is **not** a regression. With the default loaded, `best_no_pick` requires `raw_ev_no ≥ 0.16`, so this cut measures a stricter, smaller subset than the n=27 / `raw_ev_no ≥ 0.05` set behind the "−11pp" story (spec §6). Treat the emitted value as the new provisional until the 06-03 cut.
 
 - [ ] **Step 4: Final commit**
 
