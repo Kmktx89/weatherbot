@@ -1781,25 +1781,37 @@ def _sanity_keep_no(market):
 
 
 def best_no_pick(markets):
-    """Canonical 'Best EV NO' selection — the single source of truth for the
-    NO pick across the dashboard, CLI, T-24 card, and alerts.
+    """Canonical 'Best EV NO' — single source of truth for the dashboard, CLI,
+    T-24 card, and alerts.
 
-    A NO bet is `argmax ev_no` (the largest (1 - p_yes) - no_ask edge) subject to:
-      - ev_no >= MIN_BEST_EV          (edge worth taking)
-      - _sanity_keep_no               (don't fight a highly-confident market)
-      - (1 - prob) >= MIN_PRINTED_NO  (model itself must be confident the bucket
-                                       won't win — the printed-NO floor)
+    Ranks on CALIBRATED EV (cal_ev_no), so the haircut decides whether a pick
+    surfaces at all. Subject to:
+      - cal_ev_no >= MIN_BEST_EV       (calibrated edge worth taking)
+      - _sanity_keep_no                (don't fight a highly-confident market)
+      - (1 - prob) >= MIN_PRINTED_NO   (printed-NO floor; pre-haircut conviction)
 
-    The printed-NO floor was added 2026-05-26 after live validation found the
-    unfloored rule adverse-selects against the market's highest-confidence
-    buckets (NO realized 46.5% vs claimed 76.3%, -29.8pp). The floor keeps only
-    high-conviction NO bets; see docs/superpowers/specs/2026-05-26-no-selection-fix.md.
+    Computes cal_* lazily for markets missing them (e.g. historical log rows),
+    so this re-scores live_picks_log.jsonl identically to the live pipeline.
     """
+    for m in markets:
+        if "cal_ev_no" not in m:
+            apply_calibration(m)
     cands = [m for m in markets
-             if m.get("ev_no") is not None and m["ev_no"] >= MIN_BEST_EV
+             if m.get("cal_ev_no") is not None and m["cal_ev_no"] >= MIN_BEST_EV
              and m.get("prob") is not None and _sanity_keep_no(m)
              and (1 - m["prob"]) >= MIN_PRINTED_NO]
-    return max(cands, key=lambda m: m["ev_no"], default=None)
+    return max(cands, key=lambda m: m["cal_ev_no"], default=None)
+
+
+def best_yes_pick(markets):
+    """Canonical 'Best EV YES' — argmax cal_ev_yes over the MIN_BEST_EV floor.
+    Under the default identity YES haircut this equals argmax(ev_yes)."""
+    for m in markets:
+        if "cal_ev_yes" not in m:
+            apply_calibration(m)
+    cands = [m for m in markets
+             if m.get("cal_ev_yes") is not None and m["cal_ev_yes"] >= MIN_BEST_EV]
+    return max(cands, key=lambda m: m["cal_ev_yes"], default=None)
 
 
 def _log_nws_snapshot(data):

@@ -77,3 +77,44 @@ def test_apply_calibration_clamps_to_unit_interval():
     m = {"prob": 0.50, "yes_ask": 0.50, "no_ask": 0.50}
     kt.apply_calibration(m, params)
     assert m["cal_prob_no"] == 0.0
+
+
+# ---------- selection routes through calibrated EV ----------
+
+def _mkt(ticker, prob, yes_ask, no_ask):
+    return {"ticker": ticker, "subtitle": ticker, "prob": prob,
+            "yes_ask": yes_ask, "no_ask": no_ask,
+            "ev_yes": (prob - yes_ask), "ev_no": ((1 - prob) - no_ask)}
+
+
+def test_best_no_pick_suppresses_negative_calibrated_ev(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    # raw ev_no = +7c but cal_ev_no = -4c -> must be dropped by the 5c floor
+    losing = _mkt("A", prob=0.11, yes_ask=0.13, no_ask=0.82)
+    # raw ev_no = +17c, cal_ev_no = 0.84 - 0.78 = +6c -> survives
+    winning = _mkt("B", prob=0.05, yes_ask=0.06, no_ask=0.78)
+    pick = kt.best_no_pick([losing, winning])
+    assert pick is not None and pick["ticker"] == "B"
+
+
+def test_best_no_pick_lazy_computes_cal_fields_on_raw_rows(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    row = _mkt("B", prob=0.05, yes_ask=0.06, no_ask=0.78)  # no cal_* keys
+    assert "cal_ev_no" not in row
+    pick = kt.best_no_pick([row])
+    assert pick is not None and "cal_ev_no" in pick
+
+
+def test_best_no_pick_keeps_printed_no_floor(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    # printed_no = 0.79 < 0.80 floor -> never surfaces regardless of EV
+    below = _mkt("C", prob=0.21, yes_ask=0.05, no_ask=0.05)
+    assert kt.best_no_pick([below]) is None
+
+
+def test_best_yes_pick_matches_raw_ev_yes_under_identity(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    a = _mkt("A", prob=0.60, yes_ask=0.50, no_ask=0.45)  # ev_yes = +10c
+    b = _mkt("B", prob=0.30, yes_ask=0.28, no_ask=0.70)  # ev_yes = +2c
+    pick = kt.best_yes_pick([a, b])
+    assert pick is not None and pick["ticker"] == "A"
