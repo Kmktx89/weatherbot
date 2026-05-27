@@ -149,3 +149,25 @@ def test_finalize_markets_adds_cal_fields(monkeypatch):
     kt.finalize_markets(markets)
     assert "cal_ev_no" in markets[0] and markets[0]["cal_ev_no"] is not None
     assert markets[1]["cal_ev_no"] is None  # settled/None-prob row tolerated
+
+
+# ---------- consolidation: alerts uses the canonical NO pick ----------
+
+def test_alerts_no_pick_equals_canonical(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    import alerts
+    buckets = [_mkt("A", 0.11, 0.13, 0.82), _mkt("B", 0.05, 0.06, 0.78)]
+    canonical = kt.best_no_pick([dict(b) for b in buckets])
+    card = alerts.format_card({"event_ticker": "KXHIGHNY-26MAY27", "series": "KXHIGHNY",
+                               "target_date": "2026-05-27", "lead_hours": 24.0,
+                               "model": {"mu": 70.0, "sigma": 1.0},
+                               "buckets": [dict(b) for b in buckets]})
+    # the surviving NO pick (B) subtitle must appear; the suppressed one (A) must not be the NO line
+    assert "B" in card
+    assert canonical["ticker"] == "B"
+
+
+def test_alerts_has_no_private_calibration():
+    import alerts
+    assert not hasattr(alerts, "calibrate_no")
+    assert not hasattr(alerts, "best_ev_no")
