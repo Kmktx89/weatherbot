@@ -1814,6 +1814,20 @@ def best_yes_pick(markets):
     return max(cands, key=lambda m: m["cal_ev_yes"], default=None)
 
 
+def predict_summary(markets):
+    """Canonical {highest_probability, best_ev_yes, best_ev_no} over a markets
+    list. The one place the dashboard, CLI, T-24 card, and alerts derive picks."""
+    for m in markets:
+        if "cal_ev_no" not in m:
+            apply_calibration(m)
+    probs = [m for m in markets if m.get("prob") is not None]
+    return {
+        "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
+        "best_ev_yes": best_yes_pick(markets),
+        "best_ev_no": best_no_pick(markets),
+    }
+
+
 def _log_nws_snapshot(data):
     """Append one JSONL row capturing forecasts at decision time for future NWS audit."""
     try:
@@ -1843,7 +1857,7 @@ def predict_event(event_ticker):
     if data is None:
         raise LookupError_(f"unsupported series: {ev['series_ticker']}")
     _log_nws_snapshot(data)
-    probs = [m for m in data["markets"] if m.get("prob") is not None]
+    summary = predict_summary(data["markets"])
     return {
         "event_ticker": data["event_ticker"],
         "title": data["title"],
@@ -1853,11 +1867,9 @@ def predict_event(event_ticker):
         "model": data["model"],
         "settled": data["settled"],
         "settled_bucket": data["settled_bucket"],
-        "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
-        "best_ev_yes": max((m for m in data["markets"]
-                            if m.get("ev_yes") is not None and m["ev_yes"] >= MIN_BEST_EV),
-                           key=lambda m: m["ev_yes"], default=None),
-        "best_ev_no":  best_no_pick(data["markets"]),
+        "highest_probability": summary["highest_probability"],
+        "best_ev_yes": summary["best_ev_yes"],
+        "best_ev_no": summary["best_ev_no"],
         "markets": data["markets"],
     }
 

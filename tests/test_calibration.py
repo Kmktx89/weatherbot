@@ -118,3 +118,23 @@ def test_best_yes_pick_matches_raw_ev_yes_under_identity(monkeypatch):
     b = _mkt("B", prob=0.30, yes_ask=0.28, no_ask=0.70)  # ev_yes = +2c
     pick = kt.best_yes_pick([a, b])
     assert pick is not None and pick["ticker"] == "A"
+
+
+# ---------- predict_summary ----------
+
+def test_predict_summary_shape_and_picks(monkeypatch):
+    monkeypatch.setattr(kt, "_CAL_PARAMS", PARAMS)
+    markets = [
+        _mkt("TOP", prob=0.60, yes_ask=0.50, no_ask=0.45),   # highest prob + best YES
+        _mkt("NO", prob=0.05, yes_ask=0.06, no_ask=0.78),    # survives NO floor+cal
+    ]
+    s = kt.predict_summary(markets)
+    assert set(s) == {"highest_probability", "best_ev_yes", "best_ev_no"}
+    assert s["highest_probability"]["ticker"] == "TOP"
+    assert s["best_ev_yes"]["ticker"] == "TOP"
+    assert s["best_ev_no"]["ticker"] == "NO"
+
+
+def test_predict_summary_empty_markets():
+    s = kt.predict_summary([])
+    assert s == {"highest_probability": None, "best_ev_yes": None, "best_ev_no": None}
