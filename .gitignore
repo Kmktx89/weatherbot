@@ -229,6 +229,8 @@ live_picks_log.jsonl
 snapshot.err
 pushover_config.json
 alerts_sent_tickers.txt
+# lab-emitted runtime artifact; code default in kalshi_temp is canonical
+calibration_params.json
 
 # TLS material (generated locally by mkcert; never commit)
 weatherbot-cert.pem
