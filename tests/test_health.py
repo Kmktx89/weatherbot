@@ -95,3 +95,28 @@ def test_bias_drift_readings_flags_large_delta(monkeypatch):
 def _approx(v):
     from pytest import approx
     return approx(v, abs=1e-9)
+
+
+from lab.health import scan_opportunities
+
+
+def test_scan_opportunities_flags_unexploited_yes_edge():
+    recs = [{"series": "KXHIGHLAX", "implied": 0.40, "won": 1, "taken": False}
+            for _ in range(20)] + \
+           [{"series": "KXHIGHLAX", "implied": 0.40, "won": 0, "taken": False}
+            for _ in range(15)]   # 20/35 = 57.1% realized vs 40% implied, n=35
+    opps = scan_opportunities(recs)
+    lax = [o for o in opps if o.scope == "KXHIGHLAX"]
+    assert lax and lax[0].kind == "unexploited_yes_edge"
+    assert lax[0].value == _approx(round((20/35) - 0.40, 4))
+    assert lax[0].n == 35
+
+
+def test_scan_opportunities_silent_when_thin_or_no_edge():
+    assert scan_opportunities([{"series": "KXHIGHNY", "implied": 0.4, "won": 1,
+                                "taken": False}] * 10) == []   # below MIN_N
+    recs = [{"series": "KXHIGHNY", "implied": 0.5, "won": 1, "taken": False}
+            for _ in range(20)] + \
+           [{"series": "KXHIGHNY", "implied": 0.5, "won": 0, "taken": False}
+            for _ in range(20)]   # 50% realized vs 50% implied = 0 edge
+    assert scan_opportunities(recs) == []

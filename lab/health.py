@@ -188,3 +188,35 @@ def bias_drift_readings(days: int) -> list[MetricReading]:
             threshold="|Δ| <= 0.5°F", status=status, n=n,
             note=f"deployed {deployed:+.2f} fresh {row['bias']:+.2f}"))
     return out
+
+
+from collections import defaultdict
+
+
+def scan_opportunities(records: list[dict]) -> list[Opportunity]:
+    """Flag per-series unexploited YES edge.
+
+    `records`: dicts with series, implied (market prob on the pick), won (0/1),
+    taken (bool — did the bot actually take it). An opportunity = over >= MIN_N
+    UNTAKEN picks in a series, realized win-rate exceeds mean implied prob by
+    >= OPP_EDGE_MIN. Deterministic; no network.
+    """
+    by_series: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        if not r.get("taken", False):
+            by_series[r["series"]].append(r)
+    out: list[Opportunity] = []
+    for series, rs in by_series.items():
+        n = len(rs)
+        if n < MIN_N:
+            continue
+        realized = sum(r["won"] for r in rs) / n
+        implied = sum(r["implied"] for r in rs) / n
+        edge = realized - implied
+        if edge >= OPP_EDGE_MIN:
+            out.append(Opportunity(
+                kind="unexploited_yes_edge", scope=series,
+                value=round(edge, 4), n=n,
+                note=(f"untaken YES picks won {realized*100:.1f}% vs implied "
+                      f"{implied*100:.1f}% (+{edge*100:.1f}pp)")))
+    return out
