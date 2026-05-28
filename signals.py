@@ -48,3 +48,69 @@ def lead_hours_for(series: str, target_date: str, *, now: datetime | None = None
     close_day = datetime.fromisoformat(target_date).date() + timedelta(days=1)
     close = datetime(close_day.year, close_day.month, close_day.day, 1, 0, tzinfo=tz)
     return (close - now).total_seconds() / 3600.0
+
+
+def _ticket(side: str, pick: dict, event: dict, lead: float, price: float, ev: float) -> dict:
+    series = event["event_ticker"].split("-")[0]
+    return {
+        "series": series,
+        "city": kt.CITIES[series]["name"],
+        "event_ticker": event["event_ticker"],
+        "target_date": event["target_date"],
+        "side": side,
+        "bucket": pick["subtitle"],
+        "ticker": pick["ticker"],
+        "printed_prob": round(pick["cal_prob_yes"] if side == "YES" else pick["cal_prob_no"], 3),
+        "market_price": round(price, 2),
+        "ev": round(ev, 4),
+        "size_pct": size_pct(ev, price),
+        "lead_hours": round(lead, 1),
+    }
+
+
+def qualify_event(event: dict) -> list[dict]:
+    """0-2 order tickets (YES and/or NO) for one event that pass the interim bar.
+    Pure given the event dict (best_yes/no_pick are deterministic over markets)."""
+    if event.get("settled"):
+        return []
+    markets = event.get("markets") or []
+    series = event["event_ticker"].split("-")[0]
+    lead = lead_hours_for(series, event["target_date"])
+    tickets: list[dict] = []
+
+    # YES
+    y = kt.best_yes_pick(markets)
+    if y is not None:
+        ev = y.get("cal_ev_yes")
+        ya, yb = y.get("yes_ask"), y.get("yes_bid")
+        fav = market_favorite_index(markets)
+        try:
+            yi = markets.index(y)
+        except ValueError:
+            yi = None
+        agree = fav is not None and yi is not None and abs(yi - fav) <= 1
+        spread = (ya - yb) if (ya is not None and yb is not None) else 1.0
+        if (ev is not None and YES_EV_MIN <= ev <= EV_MAX and agree
+                and spread <= SPREAD_MAX and ya):
+            tickets.append(_ticket("YES", y, event, lead, ya, ev))
+
+    # NO
+    n = kt.best_no_pick(markets)
+    if n is not None and lead >= NO_LEAD_MIN:
+        ev = n.get("cal_ev_no")
+        na, prob = n.get("no_ask"), n.get("prob")
+        ya, yb = n.get("yes_ask"), n.get("yes_bid")
+        spread = (ya - yb) if (ya is not None and yb is not None) else 1.0
+        if (ev is not None and YES_EV_MIN <= ev <= EV_MAX and prob is not None
+                and (1 - prob) >= NO_PRINTED_MIN and spread <= SPREAD_MAX and na):
+            tickets.append(_ticket("NO", n, event, lead, na, ev))
+
+    return tickets
+
+
+def qualifying_signals(events: list[dict]) -> list[dict]:
+    """Flatten qualify_event over all (non-settled) events."""
+    out: list[dict] = []
+    for e in events:
+        out.extend(qualify_event(e))
+    return out

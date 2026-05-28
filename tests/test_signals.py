@@ -33,3 +33,86 @@ def test_lead_hours_for_uses_close_one_am_local_day_after():
     now = datetime(2026, 5, 28, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
     lead = lead_hours_for("KXHIGHLAX", "2026-05-28", now=now)
     assert abs(lead - 16.0) < 0.05
+
+
+from signals import qualify_event, qualifying_signals
+
+
+def _mkt(sub, prob, yb, ya, na, st="between"):
+    return {"ticker": "T-" + sub, "subtitle": sub, "strike_type": st,
+            "yes_bid": yb, "yes_ask": ya, "no_ask": na, "_sort": sub,
+            "prob": prob, "cal_prob_yes": prob, "cal_prob_no": 1 - prob,
+            "cal_ev_yes": (prob - ya) if ya else None,
+            "cal_ev_no": ((1 - prob) - na) if na else None}
+
+
+def _event(series, markets, target="2026-05-28"):
+    return {"event_ticker": f"{series}-26MAY28", "target_date": target,
+            "station": "x", "settled": False, "model": {"mu": 70.0},
+            "markets": markets}
+
+
+def test_qualify_event_yes_passes_clean(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    mkts = [_mkt("64-65", 0.05, 0.04, 0.06, 0.95),
+            _mkt("66-67", 0.65, 0.50, 0.52, 0.50)]
+    out = qualify_event(_event("KXHIGHNY", mkts))
+    yes = [t for t in out if t["side"] == "YES"]
+    assert len(yes) == 1
+    assert yes[0]["bucket"] == "66-67" and yes[0]["ev"] == round(0.13, 4)
+    assert yes[0]["market_price"] == 0.52 and yes[0]["size_pct"] > 0
+
+
+def test_qualify_event_drops_yes_below_ev_bar(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    mkts = [_mkt("66-67", 0.55, 0.50, 0.52, 0.50)]
+    assert qualify_event(_event("KXHIGHNY", mkts)) == []
+
+
+def test_qualify_event_drops_yes_huge_edge(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    mkts = [_mkt("66-67", 0.90, 0.50, 0.52, 0.50)]
+    assert qualify_event(_event("KXHIGHNY", mkts)) == []
+
+
+def test_qualify_event_drops_yes_fighting_market(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    mkts = [_mkt("60-61", 0.65, 0.50, 0.52, 0.50),
+            _mkt("64-65", 0.10, 0.10, 0.12, 0.88),
+            _mkt("70-71", 0.20, 0.55, 0.58, 0.42)]
+    assert qualify_event(_event("KXHIGHNY", mkts)) == []
+
+
+def test_qualify_event_drops_yes_wide_spread(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    mkts = [_mkt("66-67", 0.65, 0.46, 0.52, 0.50)]
+    assert qualify_event(_event("KXHIGHNY", mkts)) == []
+
+
+def test_qualify_event_no_passes_when_confident_and_early(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 24.0)
+    mkts = [_mkt("80-81", 0.05, 0.02, 0.04, 0.82)]
+    out = qualify_event(_event("KXHIGHMIA", mkts))
+    no = [t for t in out if t["side"] == "NO"]
+    assert len(no) == 1 and no[0]["market_price"] == 0.82
+
+
+def test_qualify_event_drops_no_near_close(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 10.0)
+    mkts = [_mkt("80-81", 0.05, 0.02, 0.04, 0.82)]
+    assert [t for t in qualify_event(_event("KXHIGHMIA", mkts)) if t["side"] == "NO"] == []
+
+
+def test_qualifying_signals_skips_settled(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    ev = _event("KXHIGHNY", [_mkt("66-67", 0.65, 0.50, 0.52, 0.50)])
+    ev["settled"] = True
+    assert qualifying_signals([ev]) == []
