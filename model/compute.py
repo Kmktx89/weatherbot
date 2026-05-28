@@ -54,6 +54,8 @@ def _sigma_from(inputs: ModelInputs, cfg: ModelConfig) -> float:
     allowlist. Equal weights reduce exactly to the prior statistics.pstdev.
     """
     src_w = cfg.source_weights.get(inputs.series, {})
+    # No source_weights entry for the series -> empty dict; non-NWS effective
+    # weights become 0 and sigma falls back to base_sigma.
     eff_weights: dict[str, float] = {}
     for name in cfg.sigma_sources:
         w = cfg.nws_blend if name == "nws" else (1.0 - cfg.nws_blend) * src_w.get(name, 0.0)

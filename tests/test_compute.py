@@ -1,4 +1,5 @@
 import math
+import statistics
 import time
 
 import pytest
@@ -164,7 +165,7 @@ def test_compute_nws_only_takes_simple_mean_fallback():
     out = compute(inputs, cfg)
     # fallback mean of [82.0] = 82.0; NWS overlay: 0.7*82 + 0.3*82 = 82.0
     assert out.mu_raw == pytest.approx(82.0, abs=1e-9)
-    # sigma_sources present = [82.0]; pstdev single = 0; sigma = 2.0
+    # sigma_sources present = [82.0]; weighted_std single survivor = 0; sigma = 2.0
     assert out.sigma == pytest.approx(2.0, abs=1e-9)
 
 
@@ -228,7 +229,6 @@ def test_compute_downweighted_outlier_barely_moves_sigma():
     expected_sigma = math.sqrt(1.0 ** 2 + var_w)
     assert out.sigma == pytest.approx(expected_sigma, abs=1e-9)
     # And it must be far below the OLD unweighted formula sqrt(1 + pstdev^2):
-    import statistics
     old_sigma = math.sqrt(1.0 ** 2 + statistics.pstdev([80.0, 70.0, 70.0]) ** 2)
     assert out.sigma < old_sigma - 1.0   # ~2.74 vs ~4.82
 
@@ -236,7 +236,6 @@ def test_compute_downweighted_outlier_barely_moves_sigma():
 def test_compute_equal_weights_sigma_unchanged():
     """DEN control: equal ECMWF/GFS weights, no NWS -> weighted std == pstdev,
     so sigma is exactly the old value."""
-    import statistics
     inputs = _basic_inputs(forecasts={"ecmwf": 72.0, "gfs": 68.0, "nws": None})
     cfg = _basic_cfg(
         base_sigma=1.0,
