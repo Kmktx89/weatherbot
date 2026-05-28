@@ -1,8 +1,8 @@
 """Model health loop: deterministic daily scan over the lab diagnostics.
 
-Detection/reporting ONLY. Reads data and writes exactly two files
-(docs/MODEL_HEALTH.md, docs/MODEL_CHANGES.md). Never edits model code/config/
-calibration and never trades. See spec
+Detection/reporting ONLY. Reads data and writes only docs/MODEL_HEALTH.md,
+docs/MODEL_CHANGES.md, and the docs/.health_marker fingerprint. Never edits
+model code/config/calibration and never trades. See spec
 docs/superpowers/specs/2026-05-27-model-health-loop-design.md.
 """
 from dataclasses import dataclass, field
@@ -277,19 +277,22 @@ def model_fingerprint() -> str:
     return f"{head[:12]}:{cp_hash}"
 
 
-def detect_deployed_change(marker_path: str, *, fingerprint: str | None = None) -> bool:
+def detect_deployed_change(marker_path: str, *, fingerprint: str | None = None,
+                           record: bool = True) -> bool:
     """True if the deployed-model fingerprint changed since the last run.
 
-    Writes the new fingerprint to `marker_path`. First run (no marker) counts
-    as changed. `fingerprint` is injectable for testing; defaults to
-    model_fingerprint()."""
+    When `record` is True (default), persists the new fingerprint to
+    `marker_path`; when False, reports the change WITHOUT consuming the marker
+    (so a read-only dry run doesn't suppress the next --write run's journal
+    stub). First run (no marker) counts as changed. `fingerprint` injectable
+    for testing."""
     fp = fingerprint if fingerprint is not None else model_fingerprint()
     p = Path(marker_path)
     prev = p.read_text(encoding="utf-8").strip() if p.exists() else None
-    if prev != fp:
+    changed = prev != fp
+    if changed and record:
         p.write_text(fp, encoding="utf-8")
-        return True
-    return False
+    return changed
 
 
 HEALTH_PATH = "docs/MODEL_HEALTH.md"
@@ -318,13 +321,16 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
         implied = pick.get("yes_ask")
         if implied is None:
             continue
-        taken = (pick.get("cal_ev_yes") or pick.get("ev_yes") or 0.0) >= kt.MIN_BEST_EV
+        cal = pick.get("cal_ev_yes")
+        ev = cal if cal is not None else (pick.get("ev_yes") or 0.0)
+        taken = ev >= kt.MIN_BEST_EV
         out.append({"series": ev.split("-")[0], "implied": implied,
                     "won": 1 if pick["ticker"] == wt else 0, "taken": bool(taken)})
     return out
 
 
-def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> HealthReport:
+def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None,
+                    record_change: bool = True) -> HealthReport:
     import kalshi_temp as kt
     rows = lc.read_log(log_path, since_days=days)
     records, _skips, _leads = lc.build_records(rows, cache=cache)
@@ -337,9 +343,9 @@ def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> 
             value=(round(k, 2) if k is not None else None),
             threshold="k in [0.8, 1.25]",
             status=(classify_k(k, n=n) if k is not None else "INSUFFICIENT_DATA"),
-            n=n, note="interior-bucket dispersion (1.0 = calibrated)"))
+            n=n, note="interior-bucket dispersion, archive/backtest formula (1.0 = calibrated)"))
     opportunities = scan_opportunities(_opportunity_records(rows, cache=cache))
-    changed = detect_deployed_change(MARKER_PATH)
+    changed = detect_deployed_change(MARKER_PATH, record=record_change)
     return HealthReport(
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         days=days, readings=readings, opportunities=opportunities,
@@ -349,7 +355,9 @@ def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> 
 def write_report(report: HealthReport, *, health_path: str = HEALTH_PATH,
                  changes_path: str = CHANGES_PATH) -> None:
     """Write the health report; append a change-journal stub iff the deployed
-    model changed. These are the ONLY files this module ever writes."""
+    model changed. write_report writes only the two report docs; the scan also
+    persists docs/.health_marker via detect_deployed_change — those three are
+    the module's only writes."""
     Path(health_path).write_text(render_report(report), encoding="utf-8")
     if report.deployed_model_changed:
         stub = (f"\n## {report.generated_at[:10]} — deployed model changed (stub)\n"

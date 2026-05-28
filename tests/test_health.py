@@ -171,3 +171,13 @@ def test_write_report_only_touches_the_two_docs(tmp_path):
     write_report(rep, health_path=str(health), changes_path=str(changes))
     assert health.exists()
     assert "# Model Health" in health.read_text()
+
+
+def test_detect_deployed_change_record_false_does_not_write(tmp_path):
+    marker = tmp_path / "m.txt"
+    # record=False: reports changed but does NOT create/update the marker
+    assert detect_deployed_change(str(marker), fingerprint="abc", record=False) is True
+    assert not marker.exists()
+    # record=True (default) still writes
+    assert detect_deployed_change(str(marker), fingerprint="abc") is True
+    assert marker.read_text().strip() == "abc"

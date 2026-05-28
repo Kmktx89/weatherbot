@@ -220,7 +220,7 @@ def cmd_health(args):
     from .health import run_health_scan, write_report, render_report
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    report = run_health_scan(days=args.days, log_path=args.log)
+    report = run_health_scan(days=args.days, log_path=args.log, record_change=args.write)
     if args.write:
         write_report(report)
         print(f"wrote {report.generated_at}: "
