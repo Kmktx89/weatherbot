@@ -697,6 +697,14 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 </div>
 
+<section id="signals" style="border:2px solid #2d7;border-radius:8px;padding:10px;margin:0 0 14px 0;background:#0c1a12">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <b style="color:#2d7">Qualifying Signals — interim bar</b>
+    <span id="signals-updated" style="font-size:12px;color:#888"></span>
+  </div>
+  <div id="signals-body" style="margin-top:8px;font-size:14px">loading…</div>
+</section>
+
 <div id="root">Loading…</div>
 <script>
 const fmt    = v => v == null ? '—' : v.toFixed(1) + '°';
@@ -850,6 +858,28 @@ function render(data) {
 }
 
 refresh(false);
+
+async function renderSignals() {
+  try {
+    const r = await fetch('/api/signals'); const d = await r.json();
+    const upd = document.getElementById('signals-updated');
+    const body = document.getElementById('signals-body');
+    if (d.generated_at) {
+      const ago = Math.round((Date.now() - new Date(d.generated_at)) / 60000);
+      upd.textContent = 'Last updated: ' + new Date(d.generated_at).toLocaleString() + ' (' + ago + 'm ago)';
+      upd.style.color = d.stale ? '#c33' : '#888';
+    } else { upd.textContent = 'no report yet'; upd.style.color = '#c33'; }
+    if (!d.picks || !d.picks.length) { body.textContent = 'No qualifying picks this hour.'; return; }
+    body.innerHTML = d.picks.map(function(p){ return (
+      '<div style="padding:5px 0;border-top:1px solid #234">'
+      + '<b>' + p.city + ' ' + p.target_date.slice(5) + '</b> · BUY <b>' + p.side + '</b> ' + p.bucket
+      + ' @ <b>' + Math.round(p.market_price*100) + 'c</b> · EV ' + Math.round(p.ev*100) + 'c'
+      + ' · size <b>' + p.size_pct + '%</b> · lead ' + p.lead_hours + 'h'
+      + ' <span style="font-size:11px;color:#789"> ' + p.ticker + '</span></div>'); }).join('');
+  } catch (e) { var b=document.getElementById('signals-body'); if(b) b.textContent = 'signals error: ' + e; }
+}
+renderSignals();
+setInterval(renderSignals, 60000);
 
 async function runPredict(e) {
   e.preventDefault();
@@ -1541,6 +1571,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = get_dashboard_data(force=qs.get("refresh", [""])[0] == "1")
                 self._send(200, "application/json", json.dumps(data).encode())
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            return
+
+        if path == "/api/signals":
+            try:
+                import signals as _signals
+                self._send(200, "application/json",
+                           json.dumps(_signals.read_report_payload()).encode())
             except Exception as e:
                 self._send(500, "application/json",
                            json.dumps({"error": str(e)}).encode())

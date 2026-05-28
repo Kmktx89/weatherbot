@@ -137,3 +137,23 @@ def test_build_report_shape(monkeypatch):
     assert rep["bar"] == "interim-2026-05-27"
     assert "generated_at" in rep and rep["n_open_events"] == 1
     assert isinstance(rep["picks"], list) and rep["picks"][0]["side"] == "YES"
+
+
+def test_signals_payload_marks_stale(tmp_path):
+    import json as _json, signals
+    from datetime import datetime, timezone, timedelta
+    p = tmp_path / "hourly_signals.json"
+    old = (datetime.now(timezone.utc) - timedelta(minutes=120)).astimezone().isoformat()
+    p.write_text(_json.dumps({"bar": "interim-2026-05-27", "generated_at": old,
+                              "n_open_events": 3, "picks": []}))
+    assert signals.read_report_payload(str(p), stale_after_min=90)["stale"] is True
+    fresh = datetime.now(timezone.utc).astimezone().isoformat()
+    p.write_text(_json.dumps({"bar": "interim-2026-05-27", "generated_at": fresh,
+                              "n_open_events": 3, "picks": []}))
+    assert signals.read_report_payload(str(p), stale_after_min=90)["stale"] is False
+
+
+def test_signals_payload_missing_file():
+    import signals
+    payload = signals.read_report_payload("does_not_exist_xyz.json", stale_after_min=90)
+    assert payload["stale"] is True and payload["picks"] == []

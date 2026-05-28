@@ -6,7 +6,9 @@ writes anything except via the hourly_signals.py runner. Filter logic lives
 ONLY here (single source of truth). See spec
 docs/superpowers/specs/2026-05-28-hourly-signal-report-design.md.
 """
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import kalshi_temp as kt
@@ -116,9 +118,6 @@ def qualifying_signals(events: list[dict]) -> list[dict]:
     return out
 
 
-from datetime import timezone
-
-
 def build_report(events: list[dict]) -> dict:
     """The report payload: only fully-qualifying picks (settled events skipped
     inside qualify_event)."""
@@ -130,3 +129,23 @@ def build_report(events: list[dict]) -> dict:
         "n_open_events": n_open,
         "picks": picks,
     }
+
+
+def read_report_payload(path: str = "hourly_signals.json", *, stale_after_min: int = 90) -> dict:
+    """Read the latest report for serving; mark stale if missing or old."""
+    p = Path(path)
+    if not p.exists():
+        return {"bar": "interim-2026-05-27", "generated_at": None,
+                "n_open_events": 0, "picks": [], "stale": True}
+    data = json.loads(p.read_text(encoding="utf-8"))
+    gen = data.get("generated_at")
+    stale = True
+    if gen:
+        try:
+            age_min = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(gen).astimezone(timezone.utc)).total_seconds() / 60.0
+            stale = age_min > stale_after_min
+        except Exception:
+            stale = True
+    data["stale"] = stale
+    return data
