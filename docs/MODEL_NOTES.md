@@ -33,6 +33,8 @@ Per-city `BIAS` and `SOURCE_WEIGHTS` in `kalshi_temp.py`. Were refit 2026-05-19,
 
 ## How to read a YES pick (highest-probability bucket)
 
+> **STALE — 2026-05-27: do NOT apply the adjustment table below to current prints.** The weighted-σ change (deployed 2026-05-27) tightened σ, so printed YES probabilities are now sharper. The +5–15pp underconfidence bumps below were measured under the OLD wider σ; applied to the new tighter prints they would compound into **overconfidence**. Pre-deploy live YES was already calibrated (gap +0.0pp at T-24, n=56), and tightening σ raises the modal bucket's printed prob without changing its realized win rate — so live YES has likely tipped toward overconfident. Until the post-deploy live cut re-measures this (06-03 cut / health-loop `calibration_yes`), read tighter YES prints at face value **at most**, drop the bumps, and size conservatively. Lever if confirmed overconfident: raise `base_sigma`.
+
 The dashboard shows the model's probability mass for that bucket. **It is NOT the model's confidence that the prediction is right.** Buckets are narrow (~1 °F), so even an accurate forecast puts only 30-60% mass on the peak.
 
 **Calibrated adjustment table:**
@@ -46,7 +48,7 @@ The dashboard shows the model's probability mass for that bucket. **It is NOT th
 
 **Decision:** True EV = (calibrated prob − `yes_ask`). Take if ≥ 5¢, skip if < 5¢.
 
-YES side is consistently a touch underconfident even after the σ=1.0 graduation. Source: `2026-05-19-prediction-calibration.md`.
+YES side was a touch underconfident under the σ=1.0 graduation (source: `2026-05-19-prediction-calibration.md`) — but that predates the 2026-05-27 weighted-σ tightening; see the STALE banner above and re-measure before trusting the old underconfidence framing.
 
 **Note on the calibration layer:** YES runs at **identity haircut (0)**, so the dashboard's displayed YES `cal_prob_yes`/`cal_ev_yes` equal the raw values — this table is still a *mental* adjustment you apply. (NO, by contrast, has the haircut baked into the displayed number — see below.) Turning the YES haircut on to fold this table into the display is deferred; YES is mild and well-behaved.
 
