@@ -9,7 +9,6 @@ This is the single function called by:
 Pure with respect to inputs+cfg: no I/O, no global state.
 """
 import math
-import statistics
 
 from . import CODE_VERSION
 from .config import ModelConfig
@@ -18,6 +17,7 @@ from .primitives import (
     bucket_bounds,
     bucket_probability,
     weighted_mean,
+    weighted_std,
 )
 from .types import ModelInputs, ModelOutput
 
@@ -44,9 +44,22 @@ def _blend_sources(inputs: ModelInputs, cfg: ModelConfig) -> float | None:
 
 
 def _sigma_from(inputs: ModelInputs, cfg: ModelConfig) -> float:
-    sources = [inputs.forecasts.get(s) for s in cfg.sigma_sources]
-    sources = [v for v in sources if v is not None]
-    spread = statistics.pstdev(sources) if len(sources) > 1 else 0.0
+    """Spread of the forecast sources, weighted the same way mu weights them.
+
+    Each source's effective weight in mu is (1 - nws_blend) * source_weight
+    for ecmwf/gfs and nws_blend for nws. Using those same weights here keeps
+    sigma consistent with mu: a source mu distrusts (e.g. LAX ECMWF at 0.10)
+    contributes proportionally little to the dispersion instead of the full
+    equal-weight share it got before. cfg.sigma_sources stays the eligibility
+    allowlist. Equal weights reduce exactly to the prior statistics.pstdev.
+    """
+    src_w = cfg.source_weights.get(inputs.series, {})
+    eff_weights: dict[str, float] = {}
+    for name in cfg.sigma_sources:
+        w = cfg.nws_blend if name == "nws" else (1.0 - cfg.nws_blend) * src_w.get(name, 0.0)
+        if w > 0:
+            eff_weights[name] = w
+    spread = weighted_std(inputs.forecasts, eff_weights) or 0.0
     return math.sqrt(cfg.base_sigma ** 2 + spread ** 2)
 
 
