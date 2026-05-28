@@ -235,3 +235,6 @@ calibration_params.json
 # TLS material (generated locally by mkcert; never commit)
 weatherbot-cert.pem
 weatherbot-key.pem
+
+# hourly signal report (runtime artifact)
+hourly_signals.json

@@ -126,3 +126,14 @@ def test_qualify_event_yes_spread_exactly_5c_passes(monkeypatch):
             _mkt("66-67", 0.65, 0.47, 0.52, 0.50)]
     out = qualify_event(_event("KXHIGHNY", mkts))
     assert [t for t in out if t["side"] == "YES"], "5c-wide spread should qualify"
+
+
+def test_build_report_shape(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    ev = _event("KXHIGHNY", [_mkt("64-65", 0.05, 0.04, 0.06, 0.95),
+                             _mkt("66-67", 0.65, 0.50, 0.52, 0.50)])
+    rep = signals.build_report([ev])
+    assert rep["bar"] == "interim-2026-05-27"
+    assert "generated_at" in rep and rep["n_open_events"] == 1
+    assert isinstance(rep["picks"], list) and rep["picks"][0]["side"] == "YES"

@@ -114,3 +114,19 @@ def qualifying_signals(events: list[dict]) -> list[dict]:
     for e in events:
         out.extend(qualify_event(e))
     return out
+
+
+from datetime import timezone
+
+
+def build_report(events: list[dict]) -> dict:
+    """The report payload: only fully-qualifying picks (settled events skipped
+    inside qualify_event)."""
+    picks = qualifying_signals(events)
+    n_open = sum(1 for e in events if not e.get("settled"))
+    return {
+        "bar": "interim-2026-05-27",
+        "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "n_open_events": n_open,
+        "picks": picks,
+    }
