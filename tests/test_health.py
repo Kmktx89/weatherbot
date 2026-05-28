@@ -52,3 +52,46 @@ def test_dispersion_k_overdispersed_below_one():
 def test_dispersion_k_too_few_returns_none():
     assert dispersion_k([(1.0, 1.0)]) is None
     assert dispersion_k([]) is None
+
+
+from dataclasses import dataclass as _dc
+from lab.health import calibration_readings, bias_drift_readings
+
+
+@_dc
+class _FakeRep:   # mimics lab.calibration.CalibrationReport
+    n_bets: int
+    mean_pred: float
+    realized_rate: float
+    brier_score: float = 0.2
+
+
+def test_calibration_readings_yes_gap_and_no_net_of_haircut(monkeypatch):
+    import lab.health as h
+    monkeypatch.setattr(h, "_calibrate_side",
+                        lambda recs, side: _FakeRep(40, 0.45, 0.43) if side == "yes"
+                        else _FakeRep(40, 0.88, 0.70))
+    readings = calibration_readings(records=[], deployed_no_haircut=0.11)
+    by = {r.name: r for r in readings}
+    assert by["calibration_yes"].status == "OK"
+    assert by["calibration_yes"].value == _approx(-2.0)
+    assert by["calibration_no_net_haircut"].status == "WATCH"
+    assert by["calibration_no_net_haircut"].value == _approx(7.0)
+
+
+def test_bias_drift_readings_flags_large_delta(monkeypatch):
+    import lab.health as h
+    import kalshi_temp as kt
+    monkeypatch.setattr(kt, "BIAS", {"KXHIGHNY": -0.44, "KXHIGHDEN": -0.81})
+    monkeypatch.setattr(h, "_refit_bias",
+                        lambda days: {"KXHIGHNY": {"bias": -0.50, "n": 60, "sd": 1.4},
+                                      "KXHIGHDEN": {"bias": -2.10, "n": 60, "sd": 2.0}})
+    readings = bias_drift_readings(days=60)
+    by = {r.name: r for r in readings}
+    assert by["bias_drift_KXHIGHNY"].status == "OK"      # |−0.50−(−0.44)|=0.06
+    assert by["bias_drift_KXHIGHDEN"].status == "ALERT"  # |−2.10−(−0.81)|=1.29 > 1.0
+
+
+def _approx(v):
+    from pytest import approx
+    return approx(v, abs=1e-9)

@@ -122,3 +122,69 @@ def dispersion_by_city(days: int, cache=None) -> dict[str, tuple[float | None, i
             pairs.append((actual - res.mu, res.sigma))
         out[series] = (dispersion_k(pairs), len(pairs))
     return out
+
+
+def _calibrate_side(records, side):
+    """Indirection over live_calibration.calibrate_live (monkeypatchable)."""
+    from lab.live_calibration import calibrate_live
+    return calibrate_live(records, side)
+
+
+def _refit_bias(days):
+    """Indirection over refit_bias.refit on LIVE_TODAY (monkeypatchable)."""
+    import kalshi_temp as kt
+    from lab.configs import LIVE_TODAY
+    from lab.refit_bias import refit
+    events: list[str] = []
+    for s in kt.CITIES:
+        events.extend(e["event_ticker"] for e in kt.list_events_for_series(s, days))
+    return refit(events, LIVE_TODAY)
+
+
+def calibration_readings(records, deployed_no_haircut: float) -> list[MetricReading]:
+    """YES gap (realized−pred) and NO gap scored NET of the deployed haircut."""
+    out: list[MetricReading] = []
+    y = _calibrate_side(records, "yes")
+    y_gap = (y.realized_rate - y.mean_pred) * 100.0
+    out.append(MetricReading(
+        name="calibration_yes", value=round(y_gap, 1), threshold="|gap| <= 5pp",
+        status=classify_abs(y_gap, n=y.n_bets), n=y.n_bets,
+        note=f"pred {y.mean_pred*100:.1f}% realized {y.realized_rate*100:.1f}%"))
+    n = _calibrate_side(records, "no")
+    no_resid = ((n.mean_pred - n.realized_rate) - deployed_no_haircut) * 100.0
+    out.append(MetricReading(
+        name="calibration_no_net_haircut", value=round(no_resid, 1),
+        threshold="|residual after haircut| <= 5pp",
+        status=classify_abs(no_resid, n=n.n_bets), n=n.n_bets,
+        note=(f"NO known structural offset; pred {n.mean_pred*100:.1f}% "
+              f"realized {n.realized_rate*100:.1f}% net of {deployed_no_haircut:.2f} haircut")))
+    return out
+
+
+def bias_drift_readings(days: int) -> list[MetricReading]:
+    """Per-series |freshly-fit bias − deployed BIAS|."""
+    import kalshi_temp as kt
+    fresh = _refit_bias(days)
+    out: list[MetricReading] = []
+    for series, deployed in kt.BIAS.items():
+        row = fresh.get(series)
+        if row is None:
+            out.append(MetricReading(name=f"bias_drift_{series}", value=None,
+                                     threshold="|Δ| <= 0.5°F", status="INSUFFICIENT_DATA",
+                                     n=0, note="no fresh fit"))
+            continue
+        delta = row["bias"] - deployed
+        n = row["n"]
+        if n < MIN_N:
+            status = "INSUFFICIENT_DATA"
+        elif abs(delta) <= BIAS_WATCH:
+            status = "OK"
+        elif abs(delta) <= BIAS_ALERT:
+            status = "WATCH"
+        else:
+            status = "ALERT"
+        out.append(MetricReading(
+            name=f"bias_drift_{series}", value=round(delta, 2),
+            threshold="|Δ| <= 0.5°F", status=status, n=n,
+            note=f"deployed {deployed:+.2f} fresh {row['bias']:+.2f}"))
+    return out
