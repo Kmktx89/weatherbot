@@ -120,3 +120,26 @@ def test_scan_opportunities_silent_when_thin_or_no_edge():
            [{"series": "KXHIGHNY", "implied": 0.5, "won": 0, "taken": False}
             for _ in range(20)]   # 50% realized vs 50% implied = 0 edge
     assert scan_opportunities(recs) == []
+
+
+from lab.health import render_report
+
+
+def test_render_report_has_sections_and_flags():
+    rep = HealthReport(
+        generated_at="2026-05-27T13:00:00Z", days=14,
+        readings=[
+            MetricReading("calibration_yes", -2.0, "|gap|<=5pp", "OK", 56, "pred 45%"),
+            MetricReading("dispersion_k_KXHIGHLAX", 0.46, "k in [0.8,1.25]", "ALERT", 53,
+                          "over-dispersed"),
+        ],
+        opportunities=[Opportunity("unexploited_yes_edge", "KXHIGHLAX", 0.07, 40,
+                                   "won 47% vs 40%")],
+        deployed_model_changed=True)
+    md = render_report(rep)
+    assert "# Model Health" in md
+    assert "2026-05-27T13:00:00Z" in md
+    assert "ALERT" in md and "dispersion_k_KXHIGHLAX" in md
+    assert "unexploited_yes_edge" in md and "KXHIGHLAX" in md
+    assert "deployed model changed" in md.lower()
+    assert md.index("ALERT") < md.index("## All readings")

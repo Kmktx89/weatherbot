@@ -220,3 +220,42 @@ def scan_opportunities(records: list[dict]) -> list[Opportunity]:
                 note=(f"untaken YES picks won {realized*100:.1f}% vs implied "
                       f"{implied*100:.1f}% (+{edge*100:.1f}pp)")))
     return out
+
+
+def render_report(report: HealthReport) -> str:
+    lines: list[str] = []
+    lines.append("# Model Health")
+    lines.append("")
+    lines.append(f"_Generated {report.generated_at} · window {report.days}d · "
+                 "auto-regenerated daily; do not hand-edit (see MODEL_CHANGES.md "
+                 "for the change journal)._")
+    lines.append("")
+    if report.deployed_model_changed:
+        lines.append("> ⚠️ **Deployed model changed since last run** — add a "
+                     "`docs/MODEL_CHANGES.md` entry (what/why/validation/deployed-or-held).")
+        lines.append("")
+    flagged = [r for r in report.readings if r.status in ("ALERT", "WATCH")]
+    lines.append("## Flags")
+    if flagged:
+        for r in sorted(flagged, key=lambda x: 0 if x.status == "ALERT" else 1):
+            lines.append(f"- **{r.status}** `{r.name}` = {r.value} "
+                         f"({r.threshold}; n={r.n}) — {r.note}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## Opportunities")
+    if report.opportunities:
+        for o in report.opportunities:
+            lines.append(f"- `{o.kind}` **{o.scope}** {o.value:+} (n={o.n}) — {o.note}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## All readings")
+    lines.append("")
+    lines.append("| metric | value | status | n | threshold | note |")
+    lines.append("|---|---|---|---|---|---|")
+    for r in report.readings:
+        lines.append(f"| {r.name} | {r.value} | {r.status} | {r.n} | "
+                     f"{r.threshold} | {r.note} |")
+    lines.append("")
+    return "\n".join(lines)
