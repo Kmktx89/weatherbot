@@ -9,6 +9,8 @@
 
 Every hour, surface the model's current picks that clear the **interim conservative bar**, delivered two ways: (1) a push notification to the phone, (2) a panel on the live dashboard that shows the picks **and the time the latest report was generated**. Detection/reporting only — it never trades or changes the model.
 
+**Strictly gated, zero-analysis.** Every line on the report is a complete, executable order ticket that has passed ALL thresholds below. There are NO borderline, contingent, conditional, or "watch" entries — nothing the user has to analyze or decide. If a pick is shown, it is a clean trade. An empty hour simply reads "No qualifying picks this hour."
+
 ## The interim bar (precise filter)
 
 Start from the model's canonically-surfaced picks (reuse `kalshi_temp.best_yes_pick` / `best_no_pick`, which already apply the deployed calibration + floors + sanity cap), then apply the probation overlay:
@@ -23,11 +25,27 @@ Start from the model's canonically-surfaced picks (reuse `kalshi_temp.best_yes_p
 - `cal_ev_no` >= **0.10**, AND `cal_ev_no` <= **0.25**, AND
 - printed `1 - P_yes` >= **0.90** (the standing "NO only when very confident" floor), AND
 - the deployed sanity cap already enforced by `best_no_pick` holds (not fighting a `yes_ask >= 0.85` market while the model rates the bucket <= 0.40), AND
-- spread `no_ask - no_bid` <= **0.05**.
+- spread `no_ask - no_bid` <= **0.05**, AND
+- **timing gate:** `lead_hours` >= **18** (NO is never shown near close, where it is adverse-selected).
 
-Each qualifying pick also carries its `lead_hours`; the report annotates picks outside the T-36h–T-24h window (esp. NO inside T-12h) as lower-confidence rather than dropping them — the bar above is the gate.
+Every pick carries its `lead_hours` for context, but ONLY fully-qualifying picks appear — there is no "lower-confidence" or contingent tier. The gate is binary: pass all conditions → shown as a clean ticket; otherwise → not shown.
 
 Thresholds are constants at the top of the script so they're trivially tunable as the live calibration comes in.
+
+## Report format — clean order tickets (zero analysis)
+
+Each qualifying pick renders as ONE complete order ticket — everything needed to place the trade with no further thought:
+
+```
+[CITY Mon-DD] BUY <YES|NO> <bucket>° @ <price>¢ · EV <ev>¢ · size <s>% of bankroll · lead <L>h
+```
+
+- `price` = the actual ask you pay: `yes_ask` for YES, `no_ask` for NO.
+- `EV` = `cal_ev_yes` / `cal_ev_no`, in cents.
+- `size` = ⅛-Kelly as a % of bankroll = `12.5 × EV/price` (EV and price as 0–1 dollars), rounded to 0.1% — self-contained, just multiply by your bankroll.
+- `lead` = hours to close; the market `ticker` is included (smaller) so the order is unambiguous.
+
+The dashboard panel lists these tickets + the "Last updated" line. The push sends the same tickets compacted (e.g. `LAX May-28 NO 74+ @ 96¢ EV 12¢ 2.3%`), or "N qualifying picks — open dashboard" if they exceed the notification length. Empty hour: "No qualifying picks this hour."
 
 ## Architecture (three decoupled units)
 
