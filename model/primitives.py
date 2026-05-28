@@ -36,6 +36,34 @@ def weighted_mean(
     return sum(v * w for v, w in parts) / total_w
 
 
+def weighted_std(
+    values: Mapping[str, float | None],
+    weights: Mapping[str, float],
+) -> float | None:
+    """Population standard deviation of `values`, weighted by `weights`.
+
+    Same key/None/renormalisation semantics as `weighted_mean`: missing
+    values are dropped and weights renormalised over survivors. Returns
+    None if no key has a non-None value or surviving weights sum to <= 0,
+    and 0.0 if only one source survives (no spread is measurable). With
+    equal weights this equals statistics.pstdev of the surviving values.
+    """
+    parts: list[tuple[float, float]] = []
+    for key, w in weights.items():
+        v = values.get(key)
+        if v is None or w <= 0:
+            continue
+        parts.append((v, w))
+    if not parts:
+        return None
+    total_w = sum(w for _, w in parts)
+    if total_w <= 0:
+        return None
+    mean = sum(v * w for v, w in parts) / total_w
+    var = sum(w * (v - mean) ** 2 for v, w in parts) / total_w
+    return math.sqrt(var)
+
+
 def bucket_bounds(market) -> tuple[float, float] | None:
     """Continuous bounds for a Kalshi bucket. Lower/upper may be ±inf.
 

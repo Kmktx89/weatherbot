@@ -1,6 +1,7 @@
 import math
+import statistics
 
-from model.primitives import normal_cdf, weighted_mean
+from model.primitives import normal_cdf, weighted_mean, weighted_std
 
 
 def test_normal_cdf_at_mean_is_half():
@@ -38,6 +39,39 @@ def test_weighted_mean_zero_total_weight_returns_none():
 def test_weighted_mean_ignores_unknown_keys():
     out = weighted_mean({"a": 1.0, "z": 99.0}, {"a": 1.0})
     assert out == pytest_approx(1.0)
+
+
+def test_weighted_std_equal_weights_matches_pstdev():
+    # Equal weights must reduce exactly to population stdev (the old behaviour).
+    assert weighted_std({"a": 72.0, "b": 70.0}, {"a": 1.0, "b": 1.0}) == \
+        pytest_approx(statistics.pstdev([72.0, 70.0]))  # == 1.0
+
+
+def test_weighted_std_skewed_weights_down_weights_outlier():
+    # a=70 wt .1, b=72 wt .9 -> mean 71.8, var .1*(1.8^2)+.9*(.2^2)=.36, std .6
+    assert weighted_std({"a": 70.0, "b": 72.0}, {"a": 0.1, "b": 0.9}) == \
+        pytest_approx(0.6)
+
+
+def test_weighted_std_one_missing_renormalises():
+    # b missing -> use a(.25),c(.75) renormalised. mean=10*.25+20*.75=17.5
+    # var=.25*(7.5^2)+.75*(2.5^2)=14.0625+4.6875=18.75 -> std=sqrt(18.75)
+    out = weighted_std({"a": 10.0, "b": None, "c": 20.0},
+                       {"a": 0.25, "b": 0.5, "c": 0.75})
+    assert out == pytest_approx(18.75 ** 0.5)
+
+
+def test_weighted_std_single_present_returns_zero():
+    # one surviving source -> no spread measurable
+    assert weighted_std({"a": 75.0, "b": None}, {"a": 0.4, "b": 0.6}) == 0.0
+
+
+def test_weighted_std_none_present_returns_none():
+    assert weighted_std({"a": None, "b": None}, {"a": 0.4, "b": 0.6}) is None
+
+
+def test_weighted_std_zero_total_weight_returns_none():
+    assert weighted_std({"a": 10.0}, {"a": 0.0}) is None
 
 
 def pytest_approx(v, tol=1e-9):
