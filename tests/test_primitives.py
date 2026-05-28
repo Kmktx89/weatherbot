@@ -54,11 +54,16 @@ def test_weighted_std_skewed_weights_down_weights_outlier():
 
 
 def test_weighted_std_one_missing_renormalises():
-    # b missing -> use a(.25),c(.75) renormalised. mean=10*.25+20*.75=17.5
+    # b missing -> survivors a(.25), c(.75); total_w=1.0 (no rescaling needed). mean=10*.25+20*.75=17.5
     # var=.25*(7.5^2)+.75*(2.5^2)=14.0625+4.6875=18.75 -> std=sqrt(18.75)
     out = weighted_std({"a": 10.0, "b": None, "c": 20.0},
                        {"a": 0.25, "b": 0.5, "c": 0.75})
     assert out == pytest_approx(18.75 ** 0.5)
+
+
+def test_weighted_std_ignores_unknown_keys():
+    # value key 'z' is not in weights; should be silently ignored
+    assert weighted_std({"a": 72.0, "z": 99.0}, {"a": 1.0}) == 0.0
 
 
 def test_weighted_std_single_present_returns_zero():
