@@ -18,7 +18,8 @@ def fetch_events() -> list[dict]:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     with urllib.request.urlopen(MARKETS_URL, timeout=30, context=ctx) as r:
-        return json.loads(r.read().decode())
+        payload = json.loads(r.read().decode())
+    return signals.events_from_payload(payload)
 
 
 def main() -> int:

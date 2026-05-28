@@ -149,3 +149,11 @@ def read_report_payload(path: str = "hourly_signals.json", *, stale_after_min: i
             stale = True
     data["stale"] = stale
     return data
+
+
+def events_from_payload(payload) -> list[dict]:
+    """Extract the events list from /api/markets, which returns
+    {"updated": ..., "events": [...]}. Tolerates a bare list too."""
+    if isinstance(payload, dict):
+        return payload.get("events", []) or []
+    return payload or []

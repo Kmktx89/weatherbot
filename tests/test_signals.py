@@ -157,3 +157,11 @@ def test_signals_payload_missing_file():
     import signals
     payload = signals.read_report_payload("does_not_exist_xyz.json", stale_after_min=90)
     assert payload["stale"] is True and payload["picks"] == []
+
+
+def test_events_from_payload_extracts_events():
+    import signals
+    assert signals.events_from_payload({"updated": "x", "events": [{"a": 1}]}) == [{"a": 1}]
+    assert signals.events_from_payload({"updated": "x"}) == []
+    assert signals.events_from_payload([{"a": 1}]) == [{"a": 1}]
+    assert signals.events_from_payload(None) == []
