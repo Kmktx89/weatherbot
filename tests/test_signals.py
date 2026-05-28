@@ -116,3 +116,13 @@ def test_qualifying_signals_skips_settled(monkeypatch):
     ev = _event("KXHIGHNY", [_mkt("66-67", 0.65, 0.50, 0.52, 0.50)])
     ev["settled"] = True
     assert qualifying_signals([ev]) == []
+
+
+def test_qualify_event_yes_spread_exactly_5c_passes(monkeypatch):
+    import signals
+    monkeypatch.setattr(signals, "lead_hours_for", lambda *a, **k: 20.0)
+    # spread = 0.52 - 0.47 = exactly 0.05 -> must PASS (not lost to float error)
+    mkts = [_mkt("64-65", 0.05, 0.04, 0.06, 0.95),
+            _mkt("66-67", 0.65, 0.47, 0.52, 0.50)]
+    out = qualify_event(_event("KXHIGHNY", mkts))
+    assert [t for t in out if t["side"] == "YES"], "5c-wide spread should qualify"

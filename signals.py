@@ -89,7 +89,7 @@ def qualify_event(event: dict) -> list[dict]:
         except ValueError:
             yi = None
         agree = fav is not None and yi is not None and abs(yi - fav) <= 1
-        spread = (ya - yb) if (ya is not None and yb is not None) else 1.0
+        spread = round(ya - yb, 4) if (ya is not None and yb is not None) else 1.0
         if (ev is not None and YES_EV_MIN <= ev <= EV_MAX and agree
                 and spread <= SPREAD_MAX and ya):
             tickets.append(_ticket("YES", y, event, lead, ya, ev))
@@ -100,7 +100,7 @@ def qualify_event(event: dict) -> list[dict]:
         ev = n.get("cal_ev_no")
         na, prob = n.get("no_ask"), n.get("prob")
         ya, yb = n.get("yes_ask"), n.get("yes_bid")
-        spread = (ya - yb) if (ya is not None and yb is not None) else 1.0
+        spread = round(ya - yb, 4) if (ya is not None and yb is not None) else 1.0
         if (ev is not None and YES_EV_MIN <= ev <= EV_MAX and prob is not None
                 and (1 - prob) >= NO_PRINTED_MIN and spread <= SPREAD_MAX and na):
             tickets.append(_ticket("NO", n, event, lead, na, ev))
