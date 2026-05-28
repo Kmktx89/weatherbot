@@ -259,3 +259,37 @@ def render_report(report: HealthReport) -> str:
                      f"{r.threshold} | {r.note} |")
     lines.append("")
     return "\n".join(lines)
+
+
+from pathlib import Path
+
+
+def model_fingerprint() -> str:
+    """Fingerprint of the deployed model: git HEAD of model/ + hash of
+    calibration_params.json (if present)."""
+    import hashlib
+    import subprocess
+    try:
+        head = subprocess.check_output(
+            ["git", "log", "-1", "--format=%H", "--", "model", "kalshi_temp.py"],
+            text=True).strip()
+    except Exception:
+        head = "nogit"
+    cp = Path("calibration_params.json")
+    cp_hash = hashlib.sha256(cp.read_bytes()).hexdigest()[:12] if cp.exists() else "none"
+    return f"{head[:12]}:{cp_hash}"
+
+
+def detect_deployed_change(marker_path: str, *, fingerprint: str | None = None) -> bool:
+    """True if the deployed-model fingerprint changed since the last run.
+
+    Writes the new fingerprint to `marker_path`. First run (no marker) counts
+    as changed. `fingerprint` is injectable for testing; defaults to
+    model_fingerprint()."""
+    fp = fingerprint if fingerprint is not None else model_fingerprint()
+    p = Path(marker_path)
+    prev = p.read_text(encoding="utf-8").strip() if p.exists() else None
+    if prev != fp:
+        p.write_text(fp, encoding="utf-8")
+        return True
+    return False

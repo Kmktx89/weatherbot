@@ -143,3 +143,15 @@ def test_render_report_has_sections_and_flags():
     assert "unexploited_yes_edge" in md and "KXHIGHLAX" in md
     assert "deployed model changed" in md.lower()
     assert md.index("ALERT") < md.index("## All readings")
+
+
+from lab.health import detect_deployed_change
+
+
+def test_detect_deployed_change_first_run_then_stable(tmp_path):
+    marker = tmp_path / "marker.txt"
+    assert detect_deployed_change(str(marker), fingerprint="abc") is True
+    assert marker.read_text().strip() == "abc"
+    assert detect_deployed_change(str(marker), fingerprint="abc") is False
+    assert detect_deployed_change(str(marker), fingerprint="def") is True
+    assert marker.read_text().strip() == "def"
