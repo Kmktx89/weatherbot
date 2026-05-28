@@ -31,3 +31,24 @@ def test_dataclasses_construct():
     h = HealthReport(generated_at="t", days=14, readings=[r], opportunities=[o],
                      deployed_model_changed=False)
     assert h.readings[0].status == "OK" and h.opportunities[0].scope == "KXHIGHLAX"
+
+
+import math
+from lab.health import dispersion_k
+
+
+def test_dispersion_k_calibrated_pairs_near_one():
+    pairs = [(-10.0, 10.0), (10.0, 10.0)]  # z = [-1, 1], pvar(z)=1.0
+    k = dispersion_k(pairs)
+    # Q = (1/3)*mean(1/sigma^2) = (1/3)*(1/100); k=sqrt(1 - that)
+    assert k == math.sqrt(1.0 - (1.0 / 3.0) * (1.0 / 100.0))
+
+
+def test_dispersion_k_overdispersed_below_one():
+    pairs = [(-0.1, 5.0), (0.1, 5.0)]   # z near 0 -> k < 1 (model too wide)
+    assert dispersion_k(pairs) < 0.5
+
+
+def test_dispersion_k_too_few_returns_none():
+    assert dispersion_k([(1.0, 1.0)]) is None
+    assert dispersion_k([]) is None

@@ -69,3 +69,56 @@ def classify_k(k: float, *, n: int) -> str:
     if K_WATCH[0] <= k <= K_WATCH[1]:
         return "WATCH"
     return "ALERT"
+
+
+import math
+import statistics
+
+
+def dispersion_k(pairs: list[tuple[float, float]]) -> float | None:
+    """Quantization-adjusted dispersion multiplier from (err, sigma) pairs.
+
+    z = err/sigma; k = sqrt(max(pvar(z) - Q, 0)) with quantization term
+    Q = (1/3)*mean(1/sigma^2) (interior 2°F bucket midpoint noise). Needs >= 2
+    pairs. k~1 calibrated, k<1 over-dispersed, k>1 under-dispersed.
+    """
+    if len(pairs) < 2:
+        return None
+    z = [e / s for e, s in pairs]
+    var_z = statistics.pvariance(z)
+    q = (1.0 / 3.0) * statistics.mean(1.0 / (s * s) for _, s in pairs)
+    return math.sqrt(max(var_z - q, 0.0))
+
+
+def dispersion_by_city(days: int, cache=None) -> dict[str, tuple[float | None, int]]:
+    """Per-series interior-bucket dispersion k over settled events.
+
+    Returns {series: (k, n_interior_events)}. Reuses build_historical_inputs +
+    compute(LIVE_TODAY); restricts to strike_type=="between" winners for the
+    clean quantization cut. No network beyond the cached diagnostics.
+    """
+    import kalshi_temp as kt
+    from lab.configs import LIVE_TODAY
+    from lab.inputs import build_historical_inputs, winner_of
+    from lab.refit_bias import actual_high_midpoint
+    from model import compute
+
+    out: dict[str, tuple[float | None, int]] = {}
+    for series in kt.CITIES:
+        pairs: list[tuple[float, float]] = []
+        for e in kt.list_events_for_series(series, days):
+            inp = build_historical_inputs(e["event_ticker"], cache=cache)
+            if inp is None:
+                continue
+            w = winner_of(list(inp.markets))
+            if w is None or w.get("strike_type") != "between":
+                continue
+            actual = actual_high_midpoint(w)
+            if actual is None:
+                continue
+            res = compute(inp, LIVE_TODAY)
+            if res.mu is None or res.sigma is None:
+                continue
+            pairs.append((actual - res.mu, res.sigma))
+        out[series] = (dispersion_k(pairs), len(pairs))
+    return out
