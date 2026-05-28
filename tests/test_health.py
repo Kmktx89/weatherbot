@@ -155,3 +155,33 @@ def test_detect_deployed_change_first_run_then_stable(tmp_path):
     assert detect_deployed_change(str(marker), fingerprint="abc") is False
     assert detect_deployed_change(str(marker), fingerprint="def") is True
     assert marker.read_text().strip() == "def"
+
+
+from lab.health import run_health_scan, write_report, HEALTH_PATH, CHANGES_PATH
+
+
+def test_run_health_scan_assembles_report(monkeypatch):
+    import lab.health as h
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: [{"x": 1}])
+    monkeypatch.setattr(h.lc, "build_records", lambda rows, target_lead=24.0, cache=None: ([], {}, []))
+    monkeypatch.setattr(h, "calibration_readings",
+                        lambda records, deployed_no_haircut: [
+                            MetricReading("calibration_yes", -2.0, "t", "OK", 40, "")])
+    monkeypatch.setattr(h, "bias_drift_readings", lambda days: [])
+    monkeypatch.setattr(h, "dispersion_by_city",
+                        lambda days, cache=None: {"KXHIGHLAX": (0.46, 53)})
+    monkeypatch.setattr(h, "_opportunity_records", lambda rows, cache=None: [])
+    monkeypatch.setattr(h, "detect_deployed_change", lambda marker, **k: False)
+    rep = run_health_scan(days=14, log_path="x.jsonl")
+    names = {r.name for r in rep.readings}
+    assert "calibration_yes" in names and "dispersion_k_KXHIGHLAX" in names
+    assert rep.days == 14
+
+
+def test_write_report_only_touches_the_two_docs(tmp_path):
+    rep = HealthReport(generated_at="t", days=14, deployed_model_changed=False)
+    health = tmp_path / "MODEL_HEALTH.md"
+    changes = tmp_path / "MODEL_CHANGES.md"
+    write_report(rep, health_path=str(health), changes_path=str(changes))
+    assert health.exists()
+    assert "# Model Health" in health.read_text()

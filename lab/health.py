@@ -293,3 +293,74 @@ def detect_deployed_change(marker_path: str, *, fingerprint: str | None = None) 
         p.write_text(fp, encoding="utf-8")
         return True
     return False
+
+
+from datetime import datetime, timezone
+
+import lab.live_calibration as lc
+
+HEALTH_PATH = "docs/MODEL_HEALTH.md"
+CHANGES_PATH = "docs/MODEL_CHANGES.md"
+MARKER_PATH = "docs/.health_marker"
+
+
+def _opportunity_records(rows, cache=None) -> list[dict]:
+    """Build scan_opportunities input from log rows: each settled event's
+    nearest-T24 pred row -> the YES pick's implied prob, won, and whether it was
+    taken (cal_ev_yes/ev_yes >= MIN_BEST_EV). Reuses live_calibration helpers."""
+    import kalshi_temp as kt
+    out: list[dict] = []
+    by_ev = lc._by_event(rows)
+    for ev, rs in by_ev.items():
+        wt = lc._winner_ticker(rs, ev, cache)
+        if wt is None:
+            continue
+        preds = [r for r in rs if lc._has_pred(r) and r.get("lead_hours") is not None]
+        if not preds:
+            continue
+        row = min(preds, key=lambda r: abs(r["lead_hours"] - 24.0))
+        pick = lc._yes_pick(row.get("buckets", []))
+        if pick is None:
+            continue
+        implied = pick.get("yes_ask")
+        if implied is None:
+            continue
+        taken = (pick.get("cal_ev_yes") or pick.get("ev_yes") or 0.0) >= kt.MIN_BEST_EV
+        out.append({"series": ev.split("-")[0], "implied": implied,
+                    "won": 1 if pick["ticker"] == wt else 0, "taken": bool(taken)})
+    return out
+
+
+def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> HealthReport:
+    import kalshi_temp as kt
+    rows = lc.read_log(log_path, since_days=days)
+    records, _skips, _leads = lc.build_records(rows, cache=cache)
+    readings: list[MetricReading] = []
+    readings += calibration_readings(records, deployed_no_haircut=kt.haircut_for("no", 0.85))
+    readings += bias_drift_readings(days=max(days, 60))
+    for series, (k, n) in dispersion_by_city(days=max(days, 60), cache=cache).items():
+        readings.append(MetricReading(
+            name=f"dispersion_k_{series}",
+            value=(round(k, 2) if k is not None else None),
+            threshold="k in [0.8, 1.25]",
+            status=(classify_k(k, n=n) if k is not None else "INSUFFICIENT_DATA"),
+            n=n, note="interior-bucket dispersion (1.0 = calibrated)"))
+    opportunities = scan_opportunities(_opportunity_records(rows, cache=cache))
+    changed = detect_deployed_change(MARKER_PATH)
+    return HealthReport(
+        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        days=days, readings=readings, opportunities=opportunities,
+        deployed_model_changed=changed)
+
+
+def write_report(report: HealthReport, *, health_path: str = HEALTH_PATH,
+                 changes_path: str = CHANGES_PATH) -> None:
+    """Write the health report; append a change-journal stub iff the deployed
+    model changed. These are the ONLY files this module ever writes."""
+    Path(health_path).write_text(render_report(report), encoding="utf-8")
+    if report.deployed_model_changed:
+        stub = (f"\n## {report.generated_at[:10]} — deployed model changed (stub)\n"
+                "- change: _fill in_\n- why: _fill in_\n- validation: _fill in_\n"
+                "- deployed-or-held: _fill in_\n- commit: _fill in_\n")
+        with open(changes_path, "a", encoding="utf-8") as f:
+            f.write(stub)

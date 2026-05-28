@@ -216,6 +216,22 @@ def cmd_live_calibration(args):
         print("  Skips: " + ", ".join(f"{v}× {k}" for k, v in skips.items()))
 
 
+def cmd_health(args):
+    import sys
+    from .health import run_health_scan, write_report, render_report
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    report = run_health_scan(days=args.days, log_path=args.log)
+    if args.write:
+        write_report(report)
+        print(f"wrote {report.generated_at}: "
+              f"{sum(1 for r in report.readings if r.status=='ALERT')} ALERT, "
+              f"{sum(1 for r in report.readings if r.status=='WATCH')} WATCH, "
+              f"{len(report.opportunities)} opportunities")
+    else:
+        print(render_report(report))
+
+
 def cmd_sweep(args):
     base = _configs.get(args.config)
     events = _resolve_events(args)
@@ -320,6 +336,13 @@ def build_parser() -> argparse.ArgumentParser:
                     const="calibration_params.json", default=None,
                     help="write calibration_params.json from this cut and exit")
     lc.set_defaults(func=cmd_live_calibration)
+
+    hp = sub.add_parser("health", help="daily model health scan -> docs/MODEL_HEALTH.md")
+    hp.add_argument("--days", type=int, default=14)
+    hp.add_argument("--log", default="live_picks_log.jsonl")
+    hp.add_argument("--write", action="store_true",
+                    help="overwrite docs/MODEL_HEALTH.md (+ change-journal stub)")
+    hp.set_defaults(func=cmd_health)
 
     sw = sub.add_parser("sweep", help="sweep a ModelConfig parameter (YES + NO)")
     sw.add_argument("--config", default="live-today",
