@@ -12,6 +12,8 @@ from collections import defaultdict
 from pathlib import Path
 from datetime import datetime, timezone
 
+import lab.live_calibration as lc
+
 # Thresholds (initial, tunable). MIN_N encodes the n~15 lesson: below it,
 # a metric reports INSUFFICIENT_DATA rather than flagging.
 MIN_N = 30
@@ -300,7 +302,6 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
     nearest-T24 pred row -> the YES pick's implied prob, won, and whether it was
     taken (cal_ev_yes/ev_yes >= MIN_BEST_EV). Reuses live_calibration helpers."""
     import kalshi_temp as kt
-    import lab.live_calibration as lc
     out: list[dict] = []
     by_ev = lc._by_event(rows)
     for ev, rs in by_ev.items():
@@ -323,11 +324,8 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
     return out
 
 
-def run_health_scan(days: int = 14, log_path: str = None, cache=None) -> HealthReport:
+def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> HealthReport:
     import kalshi_temp as kt
-    import lab.live_calibration as lc
-    if log_path is None:
-        log_path = lc.LOG_PATH
     rows = lc.read_log(log_path, since_days=days)
     records, _skips, _leads = lc.build_records(rows, cache=cache)
     readings: list[MetricReading] = []
