@@ -1,6 +1,12 @@
+import math
+from dataclasses import dataclass as _dc
+
 from lab.health import (
     MetricReading, Opportunity, HealthReport,
     MIN_N, classify_abs, classify_k,
+    dispersion_k, calibration_readings, bias_drift_readings,
+    scan_opportunities, render_report, detect_deployed_change,
+    run_health_scan, write_report, HEALTH_PATH, CHANGES_PATH,
 )
 
 
@@ -33,10 +39,6 @@ def test_dataclasses_construct():
     assert h.readings[0].status == "OK" and h.opportunities[0].scope == "KXHIGHLAX"
 
 
-import math
-from lab.health import dispersion_k
-
-
 def test_dispersion_k_calibrated_pairs_near_one():
     pairs = [(-10.0, 10.0), (10.0, 10.0)]  # z = [-1, 1], pvar(z)=1.0
     k = dispersion_k(pairs)
@@ -52,10 +54,6 @@ def test_dispersion_k_overdispersed_below_one():
 def test_dispersion_k_too_few_returns_none():
     assert dispersion_k([(1.0, 1.0)]) is None
     assert dispersion_k([]) is None
-
-
-from dataclasses import dataclass as _dc
-from lab.health import calibration_readings, bias_drift_readings
 
 
 @_dc
@@ -97,9 +95,6 @@ def _approx(v):
     return approx(v, abs=1e-9)
 
 
-from lab.health import scan_opportunities
-
-
 def test_scan_opportunities_flags_unexploited_yes_edge():
     recs = [{"series": "KXHIGHLAX", "implied": 0.40, "won": 1, "taken": False}
             for _ in range(20)] + \
@@ -122,9 +117,6 @@ def test_scan_opportunities_silent_when_thin_or_no_edge():
     assert scan_opportunities(recs) == []
 
 
-from lab.health import render_report
-
-
 def test_render_report_has_sections_and_flags():
     rep = HealthReport(
         generated_at="2026-05-27T13:00:00Z", days=14,
@@ -145,9 +137,6 @@ def test_render_report_has_sections_and_flags():
     assert md.index("ALERT") < md.index("## All readings")
 
 
-from lab.health import detect_deployed_change
-
-
 def test_detect_deployed_change_first_run_then_stable(tmp_path):
     marker = tmp_path / "marker.txt"
     assert detect_deployed_change(str(marker), fingerprint="abc") is True
@@ -155,9 +144,6 @@ def test_detect_deployed_change_first_run_then_stable(tmp_path):
     assert detect_deployed_change(str(marker), fingerprint="abc") is False
     assert detect_deployed_change(str(marker), fingerprint="def") is True
     assert marker.read_text().strip() == "def"
-
-
-from lab.health import run_health_scan, write_report, HEALTH_PATH, CHANGES_PATH
 
 
 def test_run_health_scan_assembles_report(monkeypatch):

@@ -217,7 +217,6 @@ def cmd_live_calibration(args):
 
 
 def cmd_health(args):
-    import sys
     from .health import run_health_scan, write_report, render_report
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

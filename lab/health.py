@@ -6,6 +6,11 @@ calibration and never trades. See spec
 docs/superpowers/specs/2026-05-27-model-health-loop-design.md.
 """
 from dataclasses import dataclass, field
+import math
+import statistics
+from collections import defaultdict
+from pathlib import Path
+from datetime import datetime, timezone
 
 # Thresholds (initial, tunable). MIN_N encodes the n~15 lesson: below it,
 # a metric reports INSUFFICIENT_DATA rather than flagging.
@@ -69,10 +74,6 @@ def classify_k(k: float, *, n: int) -> str:
     if K_WATCH[0] <= k <= K_WATCH[1]:
         return "WATCH"
     return "ALERT"
-
-
-import math
-import statistics
 
 
 def dispersion_k(pairs: list[tuple[float, float]]) -> float | None:
@@ -190,9 +191,6 @@ def bias_drift_readings(days: int) -> list[MetricReading]:
     return out
 
 
-from collections import defaultdict
-
-
 def scan_opportunities(records: list[dict]) -> list[Opportunity]:
     """Flag per-series unexploited YES edge.
 
@@ -261,9 +259,6 @@ def render_report(report: HealthReport) -> str:
     return "\n".join(lines)
 
 
-from pathlib import Path
-
-
 def model_fingerprint() -> str:
     """Fingerprint of the deployed model: git HEAD of model/ + hash of
     calibration_params.json (if present)."""
@@ -295,10 +290,6 @@ def detect_deployed_change(marker_path: str, *, fingerprint: str | None = None) 
     return False
 
 
-from datetime import datetime, timezone
-
-import lab.live_calibration as lc
-
 HEALTH_PATH = "docs/MODEL_HEALTH.md"
 CHANGES_PATH = "docs/MODEL_CHANGES.md"
 MARKER_PATH = "docs/.health_marker"
@@ -309,6 +300,7 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
     nearest-T24 pred row -> the YES pick's implied prob, won, and whether it was
     taken (cal_ev_yes/ev_yes >= MIN_BEST_EV). Reuses live_calibration helpers."""
     import kalshi_temp as kt
+    import lab.live_calibration as lc
     out: list[dict] = []
     by_ev = lc._by_event(rows)
     for ev, rs in by_ev.items():
@@ -331,8 +323,11 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
     return out
 
 
-def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None) -> HealthReport:
+def run_health_scan(days: int = 14, log_path: str = None, cache=None) -> HealthReport:
     import kalshi_temp as kt
+    import lab.live_calibration as lc
+    if log_path is None:
+        log_path = lc.LOG_PATH
     rows = lc.read_log(log_path, since_days=days)
     records, _skips, _leads = lc.build_records(rows, cache=cache)
     readings: list[MetricReading] = []
