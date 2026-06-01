@@ -7,6 +7,7 @@ from lab.health import (
     dispersion_k, calibration_readings, bias_drift_readings,
     scan_opportunities, render_report, detect_deployed_change,
     run_health_scan, write_report, HEALTH_PATH, CHANGES_PATH,
+    _opportunity_records,
 )
 
 
@@ -171,6 +172,33 @@ def test_write_report_only_touches_the_two_docs(tmp_path):
     write_report(rep, health_path=str(health), changes_path=str(changes))
     assert health.exists()
     assert "# Model Health" in health.read_text()
+
+
+def test_opportunity_records_handles_taken_pick(monkeypatch):
+    """Regression for the daily-health crash: _opportunity_records must reach the
+    EV gate and emit a record when a YES pick has a yes_ask. Pre-fix this raised
+    'float has no attribute split' because the loop var `ev` (event ticker) was
+    rebound to the EV float before `ev.split('-')`. This is the one path the
+    suite never exercised (run_health_scan monkeypatches it away)."""
+    import lab.health as h
+    # Avoid network winner-resolution; pin the winner to our pick's ticker.
+    monkeypatch.setattr(h.lc, "_winner_ticker",
+                        lambda rs, ev, cache: "KXHIGHLAX-WIN")
+    rows = [{
+        "event_ticker": "KXHIGHLAX-26MAY28",
+        "lead_hours": 24.0,
+        "settled_bucket": "70° to 71°",
+        "buckets": [
+            {"ticker": "KXHIGHLAX-WIN", "subtitle": "70° to 71°",
+             "prob": 0.62, "yes_ask": 0.40, "cal_ev_yes": 0.22},
+        ],
+    }]
+    recs = _opportunity_records(rows)
+    assert len(recs) == 1
+    assert recs[0]["series"] == "KXHIGHLAX"   # series parsed from the event ticker
+    assert recs[0]["implied"] == 0.40
+    assert recs[0]["won"] == 1                # pick ticker == winner
+    assert recs[0]["taken"] is True           # cal_ev_yes 0.22 >= MIN_BEST_EV
 
 
 def test_detect_deployed_change_record_false_does_not_write(tmp_path):

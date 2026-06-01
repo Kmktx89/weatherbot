@@ -322,8 +322,8 @@ def _opportunity_records(rows, cache=None) -> list[dict]:
         if implied is None:
             continue
         cal = pick.get("cal_ev_yes")
-        ev = cal if cal is not None else (pick.get("ev_yes") or 0.0)
-        taken = ev >= kt.MIN_BEST_EV
+        ev_val = cal if cal is not None else (pick.get("ev_yes") or 0.0)
+        taken = ev_val >= kt.MIN_BEST_EV
         out.append({"series": ev.split("-")[0], "implied": implied,
                     "won": 1 if pick["ticker"] == wt else 0, "taken": bool(taken)})
     return out

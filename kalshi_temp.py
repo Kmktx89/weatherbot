@@ -143,6 +143,61 @@ def kalshi_get(path, params=None):
     return r.json()
 
 
+# ---------- live-path forecast resilience: retry + on-disk cache ----------
+# The forecast/observation endpoints (open-meteo, NWS, METAR) previously had a
+# single 15s-timeout attempt and no caching, so a transient ConnectionReset /
+# read timeout either dropped a city's input (-> None) or hung the whole loop on
+# the full 15s. We add (a) tight-timeout retry with linear backoff so a blip
+# recovers fast instead of hanging, and (b) a small on-disk cache so repeated
+# builds (dashboard refreshes; the hourly snapshot vs interleaved /api/markets
+# hits) reuse a recent fetch instead of going back to the network.
+# Live Kalshi PRICES are deliberately NOT cached here — only slow-moving weather
+# inputs — and TTLs stay short enough to respect settlement freshness.
+FORECAST_CACHE_PATH = "forecast_cache.sqlite"
+FORECAST_TTL = 1800       # open-meteo / NWS forecasts: 30 min (forecast refresh cadence)
+METAR_TTL = 300           # live obs: 5 min (matches dashboard CACHE_TTL; fresh for settlement)
+FORECAST_TIMEOUT = 8      # per-attempt seconds — short so a hung socket fails fast then retries
+FORECAST_ATTEMPTS = 3
+HIST_TIMEOUT = 15         # backtest archive can be slower; keep the original budget
+
+_fc_lock = threading.Lock()
+_forecast_cache = None     # None = uninitialised, False = disabled, else a DataCache
+
+
+def _forecast_cache_get():
+    """Lazily open the live forecast cache. Returns a DataCache or None (disabled).
+    Lazy + guarded so importing kalshi_temp never creates a file or a cycle."""
+    global _forecast_cache
+    if _forecast_cache is None:
+        with _fc_lock:
+            if _forecast_cache is None:
+                try:
+                    from lab.data_cache import DataCache
+                    _forecast_cache = DataCache(FORECAST_CACHE_PATH)
+                except Exception as e:
+                    print(f"[forecast-cache] disabled: {e}", file=sys.stderr)
+                    _forecast_cache = False
+    return _forecast_cache or None
+
+
+def _get_json_retry(url, params=None, *, timeout=FORECAST_TIMEOUT,
+                    attempts=FORECAST_ATTEMPTS, label=""):
+    """GET -> parsed JSON, retrying only transient connection/timeout errors with
+    linear backoff. Re-raises the last error if every attempt fails (callers keep
+    their existing try/except so a hard failure still degrades to None)."""
+    last = None
+    for i in range(attempts):
+        try:
+            r = session.get(url, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last = e
+            time.sleep(0.6 * (i + 1))
+    raise last
+
+
 # ---------- helpers ----------
 
 MONTHS = {m: i + 1 for i, m in enumerate(
@@ -212,8 +267,17 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
     response keys are model-suffixed (temperature_2m_max_<model>).
     """
     url = OPEN_METEO_HIST if historical else OPEN_METEO
+    # Live path uses the resilience cache; the historical/backtest path is cached
+    # separately by lab.inputs, so it bypasses this one.
+    cache = None if historical else _forecast_cache_get()
+    ckey = f"live:open_meteo:{model}:{lat:.4f},{lon:.4f}:{target_date}"
+    if cache is not None:
+        hit = cache.get(ckey, ttl=FORECAST_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(url, params={
+        data = _get_json_retry(url, params={
             "latitude": lat, "longitude": lon,
             "daily": "temperature_2m_max",
             "models": model,
@@ -221,15 +285,17 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
             "timezone": "auto",
             "start_date": target_date,
             "end_date": target_date,
-        }, timeout=15)
-        r.raise_for_status()
-        daily = r.json().get("daily") or {}
+        }, timeout=(HIST_TIMEOUT if historical else FORECAST_TIMEOUT))
+        daily = data.get("daily") or {}
         vals = daily.get("temperature_2m_max") or daily.get(f"temperature_2m_max_{model}") or []
         if vals and vals[0] is not None:
-            return float(vals[0])
+            val = float(vals[0])
     except Exception as e:
         print(f"[open-meteo:{model}{':hist' if historical else ''}] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:   # never cache a failed (None) fetch
+        cache.set(ckey, {"value": val}, source="live:open_meteo", target_date=target_date)
+    return val
 
 
 def fetch_kalshi_candlestick(series, ticker, start_ts, end_ts, period_minutes=60):
@@ -264,51 +330,77 @@ def yes_ask_at(series, ticker, decision_ts):
 
 
 def fetch_nws_high(lat, lon, target_date):
+    cache = _forecast_cache_get()
+    ckey = f"live:nws:{lat:.4f},{lon:.4f}:{target_date}"
+    if cache is not None:
+        hit = cache.get(ckey, ttl=FORECAST_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(f"{NWS}/points/{lat:.4f},{lon:.4f}", timeout=15)
-        r.raise_for_status()
-        forecast_url = r.json()["properties"]["forecast"]
-        r = session.get(forecast_url, timeout=15)
-        r.raise_for_status()
-        for p in r.json()["properties"]["periods"]:
+        pts = _get_json_retry(f"{NWS}/points/{lat:.4f},{lon:.4f}", label="nws-points")
+        forecast_url = pts["properties"]["forecast"]
+        fc = _get_json_retry(forecast_url, label="nws-forecast")
+        for p in fc["properties"]["periods"]:
             if not p.get("isDaytime"):
                 continue
             if p["startTime"][:10] == target_date:
                 temp = float(p["temperature"])
                 if p.get("temperatureUnit") == "C":
                     temp = temp * 9 / 5 + 32
-                return temp
+                val = temp
+                break
     except Exception as e:
         print(f"[nws] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:
+        cache.set(ckey, {"value": val}, source="live:nws", target_date=target_date)
+    return val
 
 
 def fetch_metar_temp(icao):
+    cache = _forecast_cache_get()
+    ckey = f"live:metar:{icao}"
+    if cache is not None:
+        hit = cache.get(ckey, ttl=METAR_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(METAR_URL, params={"ids": icao, "format": "json"}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = _get_json_retry(METAR_URL, params={"ids": icao, "format": "json"},
+                               label=f"metar:{icao}")
         if data and data[0].get("temp") is not None:
-            return float(data[0]["temp"]) * 9 / 5 + 32
+            val = float(data[0]["temp"]) * 9 / 5 + 32
     except Exception as e:
         print(f"[metar:{icao}] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:
+        cache.set(ckey, {"value": val}, source="live:metar", target_date=None)
+    return val
 
 
 def fetch_metar_today_max(icao, hours=10):
     """Max temperature (°F) observed at icao in the last `hours` hours."""
+    cache = _forecast_cache_get()
+    ckey = f"live:metar_max:{icao}:{hours}"
+    if cache is not None:
+        hit = cache.get(ckey, ttl=METAR_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(METAR_URL,
-                        params={"ids": icao, "format": "json", "hours": hours},
-                        timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = _get_json_retry(METAR_URL,
+                               params={"ids": icao, "format": "json", "hours": hours},
+                               label=f"metar-window:{icao}")
         temps = [float(o["temp"]) * 9 / 5 + 32
                  for o in (data or []) if o.get("temp") is not None]
-        return max(temps) if temps else None
+        val = max(temps) if temps else None
     except Exception as e:
         print(f"[metar-window:{icao}] {e}", file=sys.stderr)
         return None
+    if cache is not None and val is not None:
+        cache.set(ckey, {"value": val}, source="live:metar_max", target_date=None)
+    return val
 
 
 def _local_now(tz_name):

@@ -224,6 +224,11 @@ lab/.cache.sqlite
 lab/.cache.sqlite-journal
 lab/.cache.sqlite-wal
 lab/.cache.sqlite-shm
+# live-path forecast cache (open-meteo / NWS / METAR resilience cache)
+forecast_cache.sqlite
+forecast_cache.sqlite-journal
+forecast_cache.sqlite-wal
+forecast_cache.sqlite-shm
 shadow_picks.jsonl
 live_picks_log.jsonl
 snapshot.err
