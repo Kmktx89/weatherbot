@@ -27,6 +27,9 @@ from wb_thresholds import (   # noqa: E402  (kept beside the constants they docu
     BIAS_WATCH,
     BIAS_ALERT,
     OPP_EDGE_MIN,
+    BIAS_RESID_WATCH,
+    BIAS_RESID_ALERT,
+    BIAS_RESID_POOLED_MIN_N,
 )
 
 

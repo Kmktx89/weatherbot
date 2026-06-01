@@ -31,3 +31,6 @@ K_WATCH = (0.65, 1.4)        # dispersion k WATCH band (outside = ALERT)
 BIAS_WATCH = 0.5             # bias drift |delta| <= 0.5degF = OK
 BIAS_ALERT = 1.0             # |delta| > 1.0degF = ALERT (between = WATCH)
 OPP_EDGE_MIN = 0.05          # unexploited-edge opportunity floor (+5pp)
+BIAS_RESID_WATCH = 0.5       # live-path bias residual |mean| <= 0.5degF = OK
+BIAS_RESID_ALERT = 1.5       # |mean| > 1.5degF = ALERT (between = WATCH; looser than replay drift — live path is noisier)
+BIAS_RESID_POOLED_MIN_N = 30 # pooled live-residual sufficiency gate
