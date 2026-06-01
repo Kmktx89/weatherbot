@@ -251,3 +251,33 @@ def test_bias_resid_live_excludes_open_ended_and_off_lead(monkeypatch):
     assert by["bias_resid_live_KXHIGHLAX"].status == "INSUFFICIENT_DATA"
     assert by["bias_resid_live_pooled"].n == 0
     assert by["bias_resid_live_pooled"].status == "INSUFFICIENT_DATA"
+
+
+def test_bias_resid_live_pooled_ok_and_alert(monkeypatch):
+    import lab.health as h
+    import kalshi_temp as kt
+    monkeypatch.setattr(kt, "BIAS", {"KXHIGHAUS": -1.81})
+    def rows_for(mu):
+        return [{"event_ticker": f"KXHIGHAUS-26JUN{n:02d}", "lead_hours": 24.0,
+                 "settled_bucket": "94° to 95°", "model": {"mu": mu}} for n in range(1, 36)]
+    # actual 94.5; mu 94.5 -> resid 0.0 -> pooled OK
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: rows_for(94.5))
+    by = {r.name: r for r in bias_resid_live_readings(days=60, log_path="x")}
+    assert by["bias_resid_live_pooled"].status == "OK"
+    # actual 94.5; mu 92.5 -> resid +2.0 -> |2.0| > 1.5 -> ALERT
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: rows_for(92.5))
+    by = {r.name: r for r in bias_resid_live_readings(days=60, log_path="x")}
+    assert by["bias_resid_live_pooled"].status == "ALERT"
+    assert by["bias_resid_live_pooled"].value == _approx(2.0)
+
+
+def test_bias_resid_live_lead_boundary_included_at_36(monkeypatch):
+    import lab.health as h
+    import kalshi_temp as kt
+    monkeypatch.setattr(kt, "BIAS", {"KXHIGHAUS": -1.81})
+    rows = [{"event_ticker": "KXHIGHAUS-26JUN01", "lead_hours": 36.0,
+             "settled_bucket": "94° to 95°", "model": {"mu": 95.5}}]   # |36-24|=12, not > 12 -> included
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: rows)
+    by = {r.name: r for r in bias_resid_live_readings(days=60, log_path="x")}
+    assert by["bias_resid_live_KXHIGHAUS"].n == 1
+    assert by["bias_resid_live_KXHIGHAUS"].value == _approx(-1.0)
