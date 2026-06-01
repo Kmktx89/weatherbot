@@ -14,16 +14,20 @@ from datetime import datetime, timezone
 
 import lab.live_calibration as lc
 
-# Thresholds (initial, tunable). MIN_N encodes the n~15 lesson: below it,
-# a metric reports INSUFFICIENT_DATA rather than flagging.
-MIN_N = 30
-CAL_WATCH_PP = 5.0
-CAL_ALERT_PP = 10.0
-K_OK = (0.8, 1.25)
-K_WATCH = (0.65, 1.4)
-BIAS_WATCH = 0.5
-BIAS_ALERT = 1.0
-OPP_EDGE_MIN = 0.05
+# Thresholds (single source of truth in wb_thresholds; shared with the live pick
+# path and the dashboard backtest model). Re-exported here so `lab.health.MIN_N`
+# etc. stay importable. MIN_N encodes the n~15 lesson: below it a metric reports
+# INSUFFICIENT_DATA rather than flagging.
+from wb_thresholds import (   # noqa: E402  (kept beside the constants they document)
+    MIN_N,
+    CAL_WATCH_PP,
+    CAL_ALERT_PP,
+    K_OK,
+    K_WATCH,
+    BIAS_WATCH,
+    BIAS_ALERT,
+    OPP_EDGE_MIN,
+)
 
 
 @dataclass

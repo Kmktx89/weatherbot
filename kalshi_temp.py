@@ -26,6 +26,18 @@ from pathlib import Path
 
 import requests
 
+# Canonical thresholds (single source of truth — shared with the backtest model,
+# lab.replay, and the daily health scan). Re-exported as module attributes below
+# so kt.MIN_BEST_EV / kt.BASE_SIGMA etc. stay valid for existing callers.
+from wb_thresholds import (
+    BASE_SIGMA,
+    MIN_BEST_EV,
+    MIN_PRINTED_NO,
+    NO_HAIRCUT,
+    SANITY_MARKET_CONFIDENT_YES,
+    SANITY_MODEL_LOW_PROB,
+)
+
 
 # series_ticker -> resolution station metadata
 CITIES = {
@@ -45,7 +57,7 @@ NWS = "https://api.weather.gov"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 
 USER_AGENT = "kalshi-temp/0.1 (weatherbot fork)"
-BASE_SIGMA = 1.0  # °F floor on forecast uncertainty
+# BASE_SIGMA (°F floor on forecast uncertainty) is imported from wb_thresholds.
 # Graduated 2026-05-19 from 2.0 -> 1.0 based on the sigma sweep in
 # docs/superpowers/reports/2026-05-19-sigma-sweep-and-reading-guide.md:
 # +20% total backtest PnL, NO win rate 70 -> 84, calibration gaps shrink
@@ -1811,10 +1823,9 @@ def fetch_event_and_markets(event_ticker):
     return ev, markets
 
 
-SANITY_MARKET_CONFIDENT_YES = 0.85   # if yes_ask >= this, market is highly confident YES
-SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly disagrees
-MIN_BEST_EV                 = 0.05   # hide 'best' suggestions whose edge is below 5¢
-MIN_PRINTED_NO              = 0.80   # only surface NO when model's own (1-p_yes) >= this
+# Selection constants (SANITY_MARKET_CONFIDENT_YES, SANITY_MODEL_LOW_PROB,
+# MIN_BEST_EV, MIN_PRINTED_NO) are imported from wb_thresholds at the top of this
+# module — single source of truth shared with lab.replay and the health scan.
 
 # --- calibration params (haircut applied upstream of selection) ---
 # Per-side list of printed-prob bands -> haircut h (in probability points).
@@ -1825,7 +1836,7 @@ MIN_PRINTED_NO              = 0.80   # only surface NO when model's own (1-p_yes
 # n=49 cut; YES identity) and is superseded by the file when present. Refit the
 # file at the 2026-06-03 cut.
 DEFAULT_CAL_PARAMS = {
-    "no":  [{"lo": 0.80, "hi": 1.01, "h": 0.11}],
+    "no":  [{"lo": MIN_PRINTED_NO, "hi": 1.01, "h": NO_HAIRCUT}],
     "yes": [{"lo": 0.00, "hi": 1.01, "h": 0.00}],
 }
 CAL_PARAMS_PATH = "calibration_params.json"

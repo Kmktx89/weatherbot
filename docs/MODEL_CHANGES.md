@@ -64,3 +64,23 @@ changed; fill the stub in. Template:
 - deployed-or-held: HELD on model-lab (branch `wb-autonomous-fixes`) pending
   human-gated deploy. Detection-only doc/code on the lab branch; not merged to deploy.
 - commit: _set on commit_
+
+## 2026-06-01 — shared threshold module (Problem 3, consolidation only)
+- change: new `wb_thresholds.py` (pure leaf, zero imports) is the single source of
+  truth for every selection / calibration / health threshold. `kalshi_temp.py`
+  (backtest model + live picks), `lab/replay.py` (backtest replay), and
+  `lab/health.py` (daily scan) now import from it; the duplicated literals in
+  `lab/replay.py` (SANITY_* / MIN_BEST_EV) and the standalone copies in
+  `kalshi_temp` / `lab.health` are gone. `DEFAULT_CAL_PARAMS["no"]` band wired to
+  `MIN_PRINTED_NO` / `NO_HAIRCUT` (no more magic 0.80 / 0.11).
+- why: backtest, live, and health must share ONE definition so a threshold can't
+  silently drift between them. Per the new `weatherbot-backtest-harness` skill.
+- validation: NO VALUE CHANGED — `tests/test_thresholds.py` pins every shared value
+  to its pre-consolidation number and asserts each consumer re-exports the same
+  value; the existing health classification tests (which characterize scan output)
+  remain green, i.e. the scan classifies identically before/after. Full suite green;
+  run_backtest smoke OK with the shared constants.
+- deployed-or-held: HELD on model-lab (`wb-autonomous-fixes`) pending human-gated
+  deploy. Pure refactor (no behavior change), but it touches kalshi_temp.py so the
+  deployed-model fingerprint shifts — expected.
+- commit: _set on commit_
