@@ -87,8 +87,9 @@ def test_bias_drift_readings_flags_large_delta(monkeypatch):
                                       "KXHIGHDEN": {"bias": -2.10, "n": 60, "sd": 2.0}})
     readings = bias_drift_readings(days=60)
     by = {r.name: r for r in readings}
-    assert by["bias_drift_KXHIGHNY"].status == "OK"      # |−0.50−(−0.44)|=0.06
-    assert by["bias_drift_KXHIGHDEN"].status == "ALERT"  # |−2.10−(−0.81)|=1.29 > 1.0
+    assert by["bias_drift_replay_KXHIGHNY"].status == "OK"      # |−0.50−(−0.44)|=0.06
+    assert by["bias_drift_replay_KXHIGHDEN"].status == "ALERT"  # |−2.10−(−0.81)|=1.29 > 1.0
+    assert "no-NWS replay" in by["bias_drift_replay_KXHIGHNY"].note
 
 
 def _approx(v):

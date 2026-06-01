@@ -180,9 +180,9 @@ def bias_drift_readings(days: int) -> list[MetricReading]:
     for series, deployed in kt.BIAS.items():
         row = fresh.get(series)
         if row is None:
-            out.append(MetricReading(name=f"bias_drift_{series}", value=None,
+            out.append(MetricReading(name=f"bias_drift_replay_{series}", value=None,
                                      threshold="|Δ| <= 0.5°F", status="INSUFFICIENT_DATA",
-                                     n=0, note="no fresh fit"))
+                                     n=0, note="no-NWS replay refit (excl. live NWS overlay); no fresh fit"))
             continue
         delta = row["bias"] - deployed
         n = row["n"]
@@ -195,9 +195,9 @@ def bias_drift_readings(days: int) -> list[MetricReading]:
         else:
             status = "ALERT"
         out.append(MetricReading(
-            name=f"bias_drift_{series}", value=round(delta, 2),
+            name=f"bias_drift_replay_{series}", value=round(delta, 2),
             threshold="|Δ| <= 0.5°F", status=status, n=n,
-            note=f"deployed {deployed:+.2f} fresh {row['bias']:+.2f}"))
+            note=f"no-NWS replay refit (excl. live NWS overlay); deployed {deployed:+.2f} fresh {row['bias']:+.2f}"))
     return out
 
 
