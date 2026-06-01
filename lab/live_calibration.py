@@ -23,6 +23,7 @@ Per event:
 (rows are not independent across an event — directional, not inferential).
 """
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -76,6 +77,27 @@ def _has_pred(row: dict) -> bool:
 def _yes_pick(buckets: list[dict]) -> dict | None:
     cand = [b for b in buckets if b.get("prob") is not None]
     return max(cand, key=lambda b: b["prob"]) if cand else None
+
+
+def bucket_midpoint(subtitle: str | None) -> tuple[float | None, str | None]:
+    """Realized-high midpoint from a settled bucket subtitle.
+
+    "94° to 95°"   -> (94.5, "interior")
+    "70° or above" -> (71.0, "open")     # open-ended; midpoint is not a true high
+    "69° or below" -> (68.0, "open")
+    "" / None / unparseable -> (None, None)
+    """
+    if not subtitle:
+        return None, None
+    s = subtitle.lower()
+    nums = [int(x) for x in re.findall(r"-?\d+", subtitle)]
+    if "to" in s and len(nums) >= 2:
+        return (nums[0] + nums[1]) / 2.0, "interior"
+    if "above" in s and nums:
+        return nums[0] + 1.0, "open"
+    if "below" in s and nums:
+        return nums[0] - 1.0, "open"
+    return None, None
 
 
 def _no_pick(buckets: list[dict]) -> dict | None:
