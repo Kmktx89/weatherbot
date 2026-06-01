@@ -84,3 +84,10 @@ changed; fill the stub in. Template:
   deploy. Pure refactor (no behavior change), but it touches kalshi_temp.py so the
   deployed-model fingerprint shifts — expected.
 - commit: _set on commit_
+
+## 2026-06-01 — deployed model changed (stub)
+- change: _fill in_
+- why: _fill in_
+- validation: _fill in_
+- deployed-or-held: _fill in_
+- commit: _fill in_
