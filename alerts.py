@@ -22,6 +22,8 @@ from pathlib import Path
 
 import requests
 
+import kalshi_temp as kt
+
 
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 CONFIG_PATH = Path("pushover_config.json")
@@ -56,58 +58,6 @@ def _record_sent(ticker: str) -> None:
         f.write(ticker + "\n")
 
 
-def calibrate_yes(p: float) -> tuple[float, float]:
-    """Return (calibrated_prob, adjustment_pp) per MODEL_NOTES YES table.
-    Midpoint of stated ranges: ≥80 +0, 60-80 +5, 40-60 +9, <40 +12.
-    """
-    if p >= 0.80:
-        return p, 0.0
-    if p >= 0.60:
-        return min(p + 0.05, 1.0), 0.05
-    if p >= 0.40:
-        return min(p + 0.09, 1.0), 0.09
-    return min(p + 0.12, 1.0), 0.12
-
-
-def calibrate_no(p_no: float) -> tuple[float, float, str | None]:
-    """Return (calibrated_p_no, adjustment_pp, skip_reason_or_None) per
-    MODEL_NOTES NO table: ≥90 -3, 75-90 -4 (midpoint of -3 to -5), 60-75
-    SKIP danger-zone, <60 SKIP unreliable.
-    """
-    if p_no >= 0.90:
-        return p_no - 0.03, -0.03, None
-    if p_no >= 0.75:
-        return p_no - 0.04, -0.04, None
-    if p_no >= 0.60:
-        return p_no, 0.0, "danger-zone"
-    return p_no, 0.0, "unreliable"
-
-
-def best_yes(buckets: list[dict]) -> dict | None:
-    cs = [b for b in buckets if b.get("prob") is not None]
-    return max(cs, key=lambda b: b["prob"]) if cs else None
-
-
-MIN_PRINTED_NO = 0.80   # printed-NO floor; mirrors kalshi_temp.best_no_pick
-                        # (2026-05-26-no-selection-fix.md)
-
-
-def best_ev_no(buckets: list[dict],
-               sanity_yes_ask_min: float = 0.85,
-               sanity_prob_max: float = 0.40) -> dict | None:
-    cs = []
-    for b in buckets:
-        prob, ya, ev = b.get("prob"), b.get("yes_ask"), b.get("ev_no")
-        if prob is None or ya is None or ev is None:
-            continue
-        if ya >= sanity_yes_ask_min and prob <= sanity_prob_max:
-            continue
-        if (1 - prob) < MIN_PRINTED_NO:   # printed-NO floor — drop low-conviction NO
-            continue
-        cs.append(b)
-    return max(cs, key=lambda b: b["ev_no"]) if cs else None
-
-
 def _fmt_pct(x: float | None) -> str:
     return "--" if x is None else f"{x * 100:.0f}"
 
@@ -118,7 +68,6 @@ def _fmt_signed_cents(x: float | None) -> str:
 
 def format_card(row: dict) -> str:
     """5-line text card for one event row from live_picks_log.jsonl."""
-    et = row.get("event_ticker", "?")
     series = (row.get("series") or "").replace("KXHIGH", "")
     target = row.get("target_date", "?")
     lead = row.get("lead_hours")
@@ -136,37 +85,31 @@ def format_card(row: dict) -> str:
 
     buckets = row.get("buckets") or []
 
-    yes = best_yes(buckets)
+    yes = kt.best_yes_pick(buckets)
     if yes is not None:
         p = yes["prob"]
-        cal_p, _ = calibrate_yes(p)
+        cal_p = yes["cal_prob_yes"]
         ya = yes.get("yes_ask")
-        cal_ev = cal_p - ya if ya is not None else None
-        action = "SKIP-thin"
-        if cal_ev is not None and cal_ev >= TAKE_EV_THRESHOLD:
-            action = "TAKE"
+        cal_ev = yes["cal_ev_yes"]
+        # SKIP-thin is a guard for if TAKE_EV_THRESHOLD is ever raised above
+        # MIN_BEST_EV; today they're equal so surfaced picks are always TAKE.
+        action = "TAKE" if (cal_ev is not None and cal_ev >= TAKE_EV_THRESHOLD) else "SKIP-thin"
         lines.append(f"YES {yes['subtitle']}  {_fmt_pct(p)}→{_fmt_pct(cal_p)}  "
                      f"ask{_fmt_pct(ya)}  EV{_fmt_signed_cents(cal_ev)}¢  {action}")
     else:
         lines.append("YES (no pick)")
 
-    no = best_ev_no(buckets)
+    no = kt.best_no_pick(buckets)
     if no is not None:
-        p_yes = no["prob"]
-        p_no = 1.0 - p_yes
-        cal_p_no, _, skip_reason = calibrate_no(p_no)
+        printed_no = 1.0 - no["prob"]
+        cal_p_no = no["cal_prob_no"]
         na = no.get("no_ask")
-        cal_ev = cal_p_no - na if na is not None else None
-        if skip_reason:
-            action = f"SKIP-{skip_reason}"
-        elif cal_ev is not None and cal_ev >= TAKE_EV_THRESHOLD:
-            action = "TAKE"
-        else:
-            action = "SKIP-thin"
-        lines.append(f"NO  {no['subtitle']}  {_fmt_pct(p_no)}→{_fmt_pct(cal_p_no)}  "
+        cal_ev = no["cal_ev_no"]
+        action = "TAKE" if (cal_ev is not None and cal_ev >= TAKE_EV_THRESHOLD) else "SKIP-thin"
+        lines.append(f"NO  {no['subtitle']}  {_fmt_pct(printed_no)}→{_fmt_pct(cal_p_no)}  "
                      f"ask{_fmt_pct(na)}  EV{_fmt_signed_cents(cal_ev)}¢  {action}")
     else:
-        lines.append("NO  (sanity-capped)")
+        lines.append("NO  (no pick)")
 
     if yes is not None:
         yb, ya = yes.get("yes_bid"), yes.get("yes_ask")
@@ -198,9 +141,12 @@ def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
     Returns the number of events alerted on (0 on no-op / config-missing).
     """
     log = logger or (lambda m: print(m, file=sys.stderr))
-    cfg = load_config()
-    if cfg is None:
-        log("[alerts] no pushover_config.json; skipping")
+    # Transport is chosen by the NOTIFIER env switch (telegram | pushover);
+    # default pushover preserves the legacy path exactly (rollback).
+    from notifiers import get_notifier
+    notifier = get_notifier()
+    if not notifier.available():
+        log(f"[alerts] notifier '{notifier.name}' unavailable; skipping")
         return 0
 
     sent = _sent_tickers()
@@ -221,13 +167,13 @@ def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
     title = f"weatherbot T-24h ({len(qualifying)})"
     body = build_message(qualifying)
     try:
-        ok, resp = send_pushover(title, body, cfg)
+        ok, resp = notifier.send(title, body)
     except Exception as e:
-        log(f"[alerts] pushover request failed: {e}")
+        log(f"[alerts] {notifier.name} request failed: {e}")
         return 0
 
     if not ok:
-        log(f"[alerts] pushover non-200: {resp}")
+        log(f"[alerts] {notifier.name} send failed: {resp}")
         return 0
 
     for r in qualifying:

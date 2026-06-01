@@ -156,6 +156,28 @@ def calibrate_live(records: list[LiveCalRecord], side: str) -> CalibrationReport
     return report_from_pairs(side, pairs)
 
 
+def emit_params(records: list[LiveCalRecord], path: str = "calibration_params.json") -> dict:
+    """Write calibration_params.json from the NO printed-vs-realized gap on the
+    floored-pick set (one obs per event). YES is written as identity (h=0) per
+    the deployed decision; turning it on is a separate, later change.
+
+    Measures printed prob vs realized (the gap that DEFINES the haircut) — not
+    cal_prob — so emission does not feed on its own output. One-pass, no
+    fixed-point iteration.
+    """
+    rep = calibrate_live(records, "no")
+    h_no = round(rep.mean_pred - rep.realized_rate, 4) if rep.n_bets else 0.0
+    params = {
+        "no":  [{"lo": 0.80, "hi": 1.01, "h": h_no}],
+        "yes": [{"lo": 0.0, "hi": 1.01, "h": 0.0}],
+        "_meta": {"n_no": rep.n_bets, "no_mean_pred": rep.mean_pred,
+                  "no_realized": rep.realized_rate,
+                  "generated": datetime.now(timezone.utc).isoformat()},
+    }
+    Path(path).write_text(json.dumps(params, indent=2), encoding="utf-8")
+    return params
+
+
 def calibrate_by_lead(rows: list[dict], *, cache=None) -> dict:
     """Bin ALL pred rows by lead_hours; one (pred, won) pair per row per side.
 

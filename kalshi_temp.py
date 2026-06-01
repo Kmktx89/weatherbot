@@ -26,6 +26,18 @@ from pathlib import Path
 
 import requests
 
+# Canonical thresholds (single source of truth — shared with the backtest model,
+# lab.replay, and the daily health scan). Re-exported as module attributes below
+# so kt.MIN_BEST_EV / kt.BASE_SIGMA etc. stay valid for existing callers.
+from wb_thresholds import (
+    BASE_SIGMA,
+    MIN_BEST_EV,
+    MIN_PRINTED_NO,
+    NO_HAIRCUT,
+    SANITY_MARKET_CONFIDENT_YES,
+    SANITY_MODEL_LOW_PROB,
+)
+
 
 # series_ticker -> resolution station metadata
 CITIES = {
@@ -45,7 +57,7 @@ NWS = "https://api.weather.gov"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 
 USER_AGENT = "kalshi-temp/0.1 (weatherbot fork)"
-BASE_SIGMA = 1.0  # °F floor on forecast uncertainty
+# BASE_SIGMA (°F floor on forecast uncertainty) is imported from wb_thresholds.
 # Graduated 2026-05-19 from 2.0 -> 1.0 based on the sigma sweep in
 # docs/superpowers/reports/2026-05-19-sigma-sweep-and-reading-guide.md:
 # +20% total backtest PnL, NO win rate 70 -> 84, calibration gaps shrink
@@ -108,23 +120,114 @@ KALSHI_MIN_GAP = 0.25  # seconds
 
 
 def kalshi_get(path, params=None):
-    """GET against Kalshi with simple rate-limit + 429 retry."""
+    """GET against Kalshi with simple rate-limit, 429 retry, and
+    connection/DNS-error retry with backoff.
+
+    Transient DNS failures (getaddrinfo / NameResolutionError, which
+    subclasses ConnectionError) and connection timeouts were previously not
+    retried here, so a single blip dropped a city's rows for the whole
+    snapshot run and could block that day's T-24 card. Retry those the same
+    way as a 429, re-raising the last error only if every attempt failed."""
     global _kalshi_last_call
     url = f"{KALSHI}{path}"
+    last_exc = None
     for attempt in range(3):
         with _kalshi_lock:
             wait = KALSHI_MIN_GAP - (time.time() - _kalshi_last_call)
             if wait > 0:
                 time.sleep(wait)
             _kalshi_last_call = time.time()
-        r = session.get(url, params=params, timeout=15)
+        try:
+            r = session.get(url, params=params, timeout=15)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last_exc = e
+            time.sleep(1.0 * (attempt + 1))
+            continue
         if r.status_code == 429:
             time.sleep(1.0 * (attempt + 1))
             continue
         r.raise_for_status()
         return r.json()
+    if last_exc is not None:
+        raise last_exc
     r.raise_for_status()
     return r.json()
+
+
+# ---------- live-path forecast resilience: retry + on-disk cache ----------
+# The forecast/observation endpoints (open-meteo, NWS, METAR) previously had a
+# single 15s-timeout attempt and no caching, so a transient ConnectionReset /
+# read timeout either dropped a city's input (-> None) or hung the whole loop on
+# the full 15s. We add (a) tight-timeout retry with linear backoff so a blip
+# recovers fast instead of hanging, and (b) a small on-disk cache so repeated
+# builds (dashboard refreshes; the hourly snapshot vs interleaved /api/markets
+# hits) reuse a recent fetch instead of going back to the network.
+# Live Kalshi PRICES are deliberately NOT cached here — only slow-moving weather
+# inputs — and TTLs stay short enough to respect settlement freshness.
+FORECAST_CACHE_PATH = "forecast_cache.sqlite"
+FORECAST_TTL = 1800       # open-meteo / NWS forecasts: 30 min (forecast refresh cadence)
+METAR_TTL = 300           # live obs: 5 min (matches dashboard CACHE_TTL; fresh for settlement)
+FORECAST_TIMEOUT = 8      # per-attempt seconds — short so a hung socket fails fast then retries
+FORECAST_ATTEMPTS = 3
+HIST_TIMEOUT = 15         # backtest archive can be slower; keep the original budget
+
+_fc_lock = threading.Lock()
+_forecast_cache = None     # None = uninitialised, False = disabled, else a DataCache
+
+
+def _forecast_cache_get():
+    """Lazily open the live forecast cache. Returns a DataCache or None (disabled).
+    Lazy + guarded so importing kalshi_temp never creates a file or a cycle."""
+    global _forecast_cache
+    if _forecast_cache is None:
+        with _fc_lock:
+            if _forecast_cache is None:
+                try:
+                    from lab.data_cache import DataCache
+                    _forecast_cache = DataCache(FORECAST_CACHE_PATH)
+                except Exception as e:
+                    print(f"[forecast-cache] disabled: {e}", file=sys.stderr)
+                    _forecast_cache = False
+    return _forecast_cache or None
+
+
+def _fc_read(cache, key, ttl):
+    """Cache read that degrades to a miss on any error. forecast_cache.sqlite is
+    written by two live processes (serve + snapshot); a contended read must fall
+    through to a network fetch, never propagate and drop a city's row."""
+    try:
+        return cache.get(key, ttl=ttl)
+    except Exception as e:
+        print(f"[forecast-cache] read failed ({key}): {e}", file=sys.stderr)
+        return None
+
+
+def _fc_write(cache, key, value, source, target_date):
+    """Cache write that swallows errors (sqlite contention) — a failed write just
+    means the next call refetches; it must never break the build."""
+    try:
+        cache.set(key, value, source=source, target_date=target_date)
+    except Exception as e:
+        print(f"[forecast-cache] write failed ({key}): {e}", file=sys.stderr)
+
+
+def _get_json_retry(url, params=None, *, timeout=FORECAST_TIMEOUT,
+                    attempts=FORECAST_ATTEMPTS, label=""):
+    """GET -> parsed JSON, retrying only transient connection/timeout errors with
+    linear backoff. Re-raises the last error if every attempt fails (callers keep
+    their existing try/except so a hard failure still degrades to None)."""
+    last = None
+    for i in range(attempts):
+        try:
+            r = session.get(url, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last = e
+            time.sleep(0.6 * (i + 1))
+    raise last
 
 
 # ---------- helpers ----------
@@ -196,8 +299,17 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
     response keys are model-suffixed (temperature_2m_max_<model>).
     """
     url = OPEN_METEO_HIST if historical else OPEN_METEO
+    # Live path uses the resilience cache; the historical/backtest path is cached
+    # separately by lab.inputs, so it bypasses this one.
+    cache = None if historical else _forecast_cache_get()
+    ckey = f"live:open_meteo:{model}:{lat:.4f},{lon:.4f}:{target_date}"
+    if cache is not None:
+        hit = _fc_read(cache, ckey, FORECAST_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(url, params={
+        data = _get_json_retry(url, params={
             "latitude": lat, "longitude": lon,
             "daily": "temperature_2m_max",
             "models": model,
@@ -205,15 +317,17 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
             "timezone": "auto",
             "start_date": target_date,
             "end_date": target_date,
-        }, timeout=15)
-        r.raise_for_status()
-        daily = r.json().get("daily") or {}
+        }, timeout=(HIST_TIMEOUT if historical else FORECAST_TIMEOUT))
+        daily = data.get("daily") or {}
         vals = daily.get("temperature_2m_max") or daily.get(f"temperature_2m_max_{model}") or []
         if vals and vals[0] is not None:
-            return float(vals[0])
+            val = float(vals[0])
     except Exception as e:
         print(f"[open-meteo:{model}{':hist' if historical else ''}] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:   # never cache a failed (None) fetch
+        _fc_write(cache, ckey, {"value": val}, "live:open_meteo", target_date)
+    return val
 
 
 def fetch_kalshi_candlestick(series, ticker, start_ts, end_ts, period_minutes=60):
@@ -248,51 +362,77 @@ def yes_ask_at(series, ticker, decision_ts):
 
 
 def fetch_nws_high(lat, lon, target_date):
+    cache = _forecast_cache_get()
+    ckey = f"live:nws:{lat:.4f},{lon:.4f}:{target_date}"
+    if cache is not None:
+        hit = _fc_read(cache, ckey, FORECAST_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(f"{NWS}/points/{lat:.4f},{lon:.4f}", timeout=15)
-        r.raise_for_status()
-        forecast_url = r.json()["properties"]["forecast"]
-        r = session.get(forecast_url, timeout=15)
-        r.raise_for_status()
-        for p in r.json()["properties"]["periods"]:
+        pts = _get_json_retry(f"{NWS}/points/{lat:.4f},{lon:.4f}", label="nws-points")
+        forecast_url = pts["properties"]["forecast"]
+        fc = _get_json_retry(forecast_url, label="nws-forecast")
+        for p in fc["properties"]["periods"]:
             if not p.get("isDaytime"):
                 continue
             if p["startTime"][:10] == target_date:
                 temp = float(p["temperature"])
                 if p.get("temperatureUnit") == "C":
                     temp = temp * 9 / 5 + 32
-                return temp
+                val = temp
+                break
     except Exception as e:
         print(f"[nws] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:
+        _fc_write(cache, ckey, {"value": val}, "live:nws", target_date)
+    return val
 
 
 def fetch_metar_temp(icao):
+    cache = _forecast_cache_get()
+    ckey = f"live:metar:{icao}"
+    if cache is not None:
+        hit = _fc_read(cache, ckey, METAR_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(METAR_URL, params={"ids": icao, "format": "json"}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = _get_json_retry(METAR_URL, params={"ids": icao, "format": "json"},
+                               label=f"metar:{icao}")
         if data and data[0].get("temp") is not None:
-            return float(data[0]["temp"]) * 9 / 5 + 32
+            val = float(data[0]["temp"]) * 9 / 5 + 32
     except Exception as e:
         print(f"[metar:{icao}] {e}", file=sys.stderr)
-    return None
+        return None
+    if cache is not None and val is not None:
+        _fc_write(cache, ckey, {"value": val}, "live:metar", None)
+    return val
 
 
 def fetch_metar_today_max(icao, hours=10):
     """Max temperature (°F) observed at icao in the last `hours` hours."""
+    cache = _forecast_cache_get()
+    ckey = f"live:metar_max:{icao}:{hours}"
+    if cache is not None:
+        hit = _fc_read(cache, ckey, METAR_TTL)
+        if hit is not None:
+            return hit.get("value")
+    val = None
     try:
-        r = session.get(METAR_URL,
-                        params={"ids": icao, "format": "json", "hours": hours},
-                        timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = _get_json_retry(METAR_URL,
+                               params={"ids": icao, "format": "json", "hours": hours},
+                               label=f"metar-window:{icao}")
         temps = [float(o["temp"]) * 9 / 5 + 32
                  for o in (data or []) if o.get("temp") is not None]
-        return max(temps) if temps else None
+        val = max(temps) if temps else None
     except Exception as e:
         print(f"[metar-window:{icao}] {e}", file=sys.stderr)
         return None
+    if cache is not None and val is not None:
+        _fc_write(cache, ckey, {"value": val}, "live:metar_max", None)
+    return val
 
 
 def _local_now(tz_name):
@@ -456,6 +596,7 @@ def build_event_data(ev, markets):
                 print(f"[shadow] {e}", file=sys.stderr)
 
     out_markets.sort(key=lambda x: x["_sort"])
+    finalize_markets(out_markets)
     return {
         "event_ticker": ev["event_ticker"],
         "title": ev.get("title") or ev["event_ticker"],
@@ -680,6 +821,14 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 </div>
 
+<section id="signals" style="border:2px solid #2d7;border-radius:8px;padding:10px;margin:0 0 14px 0;background:#0c1a12">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <b style="color:#2d7">Qualifying Signals — interim bar</b>
+    <span id="signals-updated" style="font-size:12px;color:#888"></span>
+  </div>
+  <div id="signals-body" style="margin-top:8px;font-size:14px">loading…</div>
+</section>
+
 <div id="root">Loading…</div>
 <script>
 const fmt    = v => v == null ? '—' : v.toFixed(1) + '°';
@@ -814,15 +963,15 @@ function render(data) {
       <th>Bucket</th><th>Model P</th><th>YES bid</th><th>YES ask</th>
       <th>NO ask</th><th>EV (yes)</th><th>EV (no)</th><th>Vol 24h</th></tr></thead><tbody>`;
     for (const mk of ev.markets) {
-      const evMax = Math.max(mk.ev_yes ?? -1, mk.ev_no ?? -1);
+      const evMax = Math.max(mk.cal_ev_yes ?? -1, mk.cal_ev_no ?? -1);
       html += `<tr class="${evMax > 0.05 ? 'hi-row' : ''}">`;
       html += `<td class="bucket-name">${mk.subtitle}</td>`;
       html += `<td class="prob-cell"${probBg(mk.prob)}>${pct(mk.prob)}</td>`;
       html += `<td>${money(mk.yes_bid)}</td>`;
       html += `<td>${money(mk.yes_ask)}</td>`;
       html += `<td>${money(mk.no_ask)}</td>`;
-      html += `<td${evCellAttr(mk.ev_yes)}>${signed(mk.ev_yes)}</td>`;
-      html += `<td${evCellAttr(mk.ev_no)}>${signed(mk.ev_no)}</td>`;
+      html += `<td${evCellAttr(mk.cal_ev_yes)}>${signed(mk.cal_ev_yes)}</td>`;
+      html += `<td${evCellAttr(mk.cal_ev_no)}>${signed(mk.cal_ev_no)}</td>`;
       html += `<td class="dim">${mk.vol_24h ? mk.vol_24h.toFixed(0) : '—'}</td>`;
       html += `</tr>`;
     }
@@ -833,6 +982,28 @@ function render(data) {
 }
 
 refresh(false);
+
+async function renderSignals() {
+  try {
+    const r = await fetch('/api/signals'); const d = await r.json();
+    const upd = document.getElementById('signals-updated');
+    const body = document.getElementById('signals-body');
+    if (d.generated_at) {
+      const ago = Math.round((Date.now() - new Date(d.generated_at)) / 60000);
+      upd.textContent = 'Last updated: ' + new Date(d.generated_at).toLocaleString() + ' (' + ago + 'm ago)';
+      upd.style.color = d.stale ? '#c33' : '#888';
+    } else { upd.textContent = 'no report yet'; upd.style.color = '#c33'; }
+    if (!d.picks || !d.picks.length) { body.textContent = 'No qualifying picks this hour.'; return; }
+    body.innerHTML = d.picks.map(function(p){ return (
+      '<div style="padding:5px 0;border-top:1px solid #234">'
+      + '<b>' + p.city + ' ' + p.target_date.slice(5) + '</b> · BUY <b>' + p.side + '</b> ' + p.bucket
+      + ' @ <b>' + Math.round(p.market_price*100) + 'c</b> · EV ' + Math.round(p.ev*100) + 'c'
+      + ' · size <b>' + p.size_pct + '%</b> · lead ' + p.lead_hours + 'h'
+      + ' <span style="font-size:11px;color:#789"> ' + p.ticker + '</span></div>'); }).join('');
+  } catch (e) { var b=document.getElementById('signals-body'); if(b) b.textContent = 'signals error: ' + e; }
+}
+renderSignals();
+setInterval(renderSignals, 60000);
 
 async function runPredict(e) {
   e.preventDefault();
@@ -873,14 +1044,14 @@ function renderPredict(d, out) {
   if (top) {
     html += `<div style="margin-top:0.5rem"><b>Highest probability:</b> ${top.subtitle} `
          + `(${(top.prob*100).toFixed(1)}%)<br>`
-         + `&nbsp;YES @ ${money(top.yes_ask)}  → <span class="${cls(top.ev_yes)}">${signed(top.ev_yes)}</span>, `
-         + `NO @ ${money(top.no_ask)}  → <span class="${cls(top.ev_no)}">${signed(top.ev_no)}</span></div>`;
+         + `&nbsp;YES @ ${money(top.yes_ask)}  → <span class="${cls(top.cal_ev_yes)}">${signed(top.cal_ev_yes)}</span>, `
+         + `NO @ ${money(top.no_ask)}  → <span class="${cls(top.cal_ev_no)}">${signed(top.cal_ev_no)}</span></div>`;
   }
   const by = d.best_ev_yes, bn = d.best_ev_no;
   if (by && (!top || by.ticker !== top.ticker))
-    html += `<div>Best EV YES: ${by.subtitle} @ ${money(by.yes_ask)} → <span class="${cls(by.ev_yes)}">${signed(by.ev_yes)}</span> (P=${(by.prob*100).toFixed(1)}%)</div>`;
+    html += `<div>Best EV YES: ${by.subtitle} @ ${money(by.yes_ask)} → <span class="${cls(by.cal_ev_yes)}">${signed(by.cal_ev_yes)}</span> (P=${(by.cal_prob_yes*100).toFixed(1)}%)</div>`;
   if (bn)
-    html += `<div>Best EV NO: ${bn.subtitle} @ ${money(bn.no_ask)} → <span class="${cls(bn.ev_no)}">${signed(bn.ev_no)}</span> (P_no=${((1-bn.prob)*100).toFixed(1)}%)</div>`;
+    html += `<div>Best EV NO: ${bn.subtitle} @ ${money(bn.no_ask)} → <span class="${cls(bn.cal_ev_no)}">${signed(bn.cal_ev_no)}</span> (P_no=${(bn.cal_prob_no*100).toFixed(1)}%)</div>`;
   out.innerHTML = html;
 }
 
@@ -1334,22 +1505,22 @@ function renderCard(ev) {
   if (top) {
     picks += `<div class="row pick">
       <span class="lbl">Highest probability</span>${top.subtitle} (${fmtPct(top.prob)})<br>
-      &nbsp;YES @ ${money(top.yes_ask)} → <span class="${cls(top.ev_yes)}">${fmtSign(top.ev_yes)}</span>,
-      NO @ ${money(top.no_ask)} → <span class="${cls(top.ev_no)}">${fmtSign(top.ev_no)}</span>
+      &nbsp;YES @ ${money(top.yes_ask)} → <span class="${cls(top.cal_ev_yes)}">${fmtSign(top.cal_ev_yes)}</span>,
+      NO @ ${money(top.no_ask)} → <span class="${cls(top.cal_ev_no)}">${fmtSign(top.cal_ev_no)}</span>
     </div>`;
   }
   if (by && (!top || by.ticker !== top.ticker)) {
     picks += `<div class="row pick">
       <span class="lbl">Best EV YES</span>${by.subtitle} @ ${money(by.yes_ask)} →
-      <span class="${cls(by.ev_yes)}">${fmtSign(by.ev_yes)}</span>
-      <span class="dim">(P=${fmtPct(by.prob)})</span>
+      <span class="${cls(by.cal_ev_yes)}">${fmtSign(by.cal_ev_yes)}</span>
+      <span class="dim">(P=${fmtPct(by.cal_prob_yes)})</span>
     </div>`;
   }
   if (bn) {
     picks += `<div class="row pick">
       <span class="lbl">Best EV NO</span>${bn.subtitle} @ ${money(bn.no_ask)} →
-      <span class="${cls(bn.ev_no)}">${fmtSign(bn.ev_no)}</span>
-      <span class="dim">(P_no=${fmtPct(1 - bn.prob)})</span>
+      <span class="${cls(bn.cal_ev_no)}">${fmtSign(bn.cal_ev_no)}</span>
+      <span class="dim">(P_no=${fmtPct(bn.cal_prob_no)})</span>
     </div>`;
   }
   if (!picks) {
@@ -1529,6 +1700,16 @@ class Handler(BaseHTTPRequestHandler):
                            json.dumps({"error": str(e)}).encode())
             return
 
+        if path == "/api/signals":
+            try:
+                import signals as _signals
+                self._send(200, "application/json",
+                           json.dumps(_signals.read_report_payload()).encode())
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            return
+
         if path == "/api/t24":
             try:
                 payload = get_t24_card_payload()
@@ -1662,10 +1843,96 @@ def fetch_event_and_markets(event_ticker):
     return ev, markets
 
 
-SANITY_MARKET_CONFIDENT_YES = 0.85   # if yes_ask >= this, market is highly confident YES
-SANITY_MODEL_LOW_PROB       = 0.40   # if model_prob <= this, model strongly disagrees
-MIN_BEST_EV                 = 0.05   # hide 'best' suggestions whose edge is below 5¢
-MIN_PRINTED_NO              = 0.80   # only surface NO when model's own (1-p_yes) >= this
+# Selection constants (SANITY_MARKET_CONFIDENT_YES, SANITY_MODEL_LOW_PROB,
+# MIN_BEST_EV, MIN_PRINTED_NO) are imported from wb_thresholds at the top of this
+# module — single source of truth shared with lab.replay and the health scan.
+
+# --- calibration params (haircut applied upstream of selection) ---
+# Per-side list of printed-prob bands -> haircut h (in probability points).
+# haircut = printed - realized: positive h = overconfident (shrink), negative
+# h = underconfident (raise). The authoritative values live in
+# calibration_params.json, written by `python -m lab.cli live-calibration
+# --emit-params`. This code default is PROVISIONAL (NO ~11pp from the 2026-05-26
+# n=49 cut; YES identity) and is superseded by the file when present. Refit the
+# file at the 2026-06-03 cut.
+DEFAULT_CAL_PARAMS = {
+    "no":  [{"lo": MIN_PRINTED_NO, "hi": 1.01, "h": NO_HAIRCUT}],
+    "yes": [{"lo": 0.00, "hi": 1.01, "h": 0.00}],
+}
+CAL_PARAMS_PATH = "calibration_params.json"
+
+
+def load_calibration_params(path=CAL_PARAMS_PATH):
+    """Load per-side haircut bands. Fall back to DEFAULT_CAL_PARAMS (and log)
+    if the file is absent or malformed."""
+    p = Path(path)
+    if not p.exists():
+        return DEFAULT_CAL_PARAMS
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        for side in ("yes", "no"):
+            assert isinstance(data.get(side), list)
+            for band in data[side]:
+                float(band["lo"]); float(band["hi"]); float(band["h"])
+        return data
+    except Exception as e:
+        print(f"[calibration] falling back to default params: {e}", file=sys.stderr)
+        return DEFAULT_CAL_PARAMS
+
+
+_CAL_PARAMS = load_calibration_params()
+
+
+def haircut_for(side, printed_prob, params=None):
+    """Haircut h for `side` at this printed probability; 0.0 if no band matches."""
+    params = params if params is not None else _CAL_PARAMS
+    for band in params.get(side, []):
+        if band["lo"] <= printed_prob < band["hi"]:
+            return float(band["h"])
+    return 0.0
+
+
+def _clamp01(x):
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+
+def apply_calibration(market, params=None):
+    """Add cal_prob_{yes,no} and cal_ev_{yes,no} to `market` in place,
+    computed from prob/yes_ask/no_ask in probability space.
+
+    Idempotent (cal_* never feed back in). Exact identity when a side's
+    haircut is 0: cal_prob == prob and cal_ev == ev bit-for-bit (no clamp,
+    no rounding) so a zero-haircut side cannot flip a borderline pick.
+    """
+    params = params if params is not None else _CAL_PARAMS
+    prob = market.get("prob")
+    ya = market.get("yes_ask")
+    na = market.get("no_ask")
+    if prob is None:
+        market["cal_prob_yes"] = None
+        market["cal_prob_no"] = None
+        market["cal_ev_yes"] = None
+        market["cal_ev_no"] = None
+        return market
+    printed_no = 1.0 - prob
+    h_yes = haircut_for("yes", prob, params)
+    h_no = haircut_for("no", printed_no, params)
+    cal_prob_yes = prob if h_yes == 0.0 else _clamp01(prob - h_yes)
+    cal_prob_no = printed_no if h_no == 0.0 else _clamp01(printed_no - h_no)
+    market["cal_prob_yes"] = cal_prob_yes
+    market["cal_prob_no"] = cal_prob_no
+    market["cal_ev_yes"] = (cal_prob_yes - ya) if ya not in (None, 0.0) else None
+    market["cal_ev_no"] = (cal_prob_no - na) if na not in (None, 0.0) else None
+    return market
+
+
+def finalize_markets(markets, params=None):
+    """Apply calibration to every market in a list (in place). Used to finalize
+    build_event_data output so cal_* ship with the live dashboard and snapshots."""
+    for m in markets:
+        apply_calibration(m, params)
+    return markets
 
 
 def _sanity_keep_no(market):
@@ -1686,25 +1953,51 @@ def _sanity_keep_no(market):
 
 
 def best_no_pick(markets):
-    """Canonical 'Best EV NO' selection — the single source of truth for the
-    NO pick across the dashboard, CLI, T-24 card, and alerts.
+    """Canonical 'Best EV NO' — single source of truth for the dashboard, CLI,
+    T-24 card, and alerts.
 
-    A NO bet is `argmax ev_no` (the largest (1 - p_yes) - no_ask edge) subject to:
-      - ev_no >= MIN_BEST_EV          (edge worth taking)
-      - _sanity_keep_no               (don't fight a highly-confident market)
-      - (1 - prob) >= MIN_PRINTED_NO  (model itself must be confident the bucket
-                                       won't win — the printed-NO floor)
+    Ranks on CALIBRATED EV (cal_ev_no), so the haircut decides whether a pick
+    surfaces at all. Subject to:
+      - cal_ev_no >= MIN_BEST_EV       (calibrated edge worth taking)
+      - _sanity_keep_no                (don't fight a highly-confident market)
+      - (1 - prob) >= MIN_PRINTED_NO   (printed-NO floor; pre-haircut conviction)
 
-    The printed-NO floor was added 2026-05-26 after live validation found the
-    unfloored rule adverse-selects against the market's highest-confidence
-    buckets (NO realized 46.5% vs claimed 76.3%, -29.8pp). The floor keeps only
-    high-conviction NO bets; see docs/superpowers/specs/2026-05-26-no-selection-fix.md.
+    Computes cal_* lazily for markets missing them (e.g. historical log rows),
+    so this re-scores live_picks_log.jsonl identically to the live pipeline.
     """
+    for m in markets:
+        if "cal_ev_no" not in m:
+            apply_calibration(m)
     cands = [m for m in markets
-             if m.get("ev_no") is not None and m["ev_no"] >= MIN_BEST_EV
+             if m.get("cal_ev_no") is not None and m["cal_ev_no"] >= MIN_BEST_EV
              and m.get("prob") is not None and _sanity_keep_no(m)
              and (1 - m["prob"]) >= MIN_PRINTED_NO]
-    return max(cands, key=lambda m: m["ev_no"], default=None)
+    return max(cands, key=lambda m: m["cal_ev_no"], default=None)
+
+
+def best_yes_pick(markets):
+    """Canonical 'Best EV YES' — argmax cal_ev_yes over the MIN_BEST_EV floor.
+    Under the default identity YES haircut this equals argmax(ev_yes)."""
+    for m in markets:
+        if "cal_ev_yes" not in m:
+            apply_calibration(m)
+    cands = [m for m in markets
+             if m.get("cal_ev_yes") is not None and m["cal_ev_yes"] >= MIN_BEST_EV]
+    return max(cands, key=lambda m: m["cal_ev_yes"], default=None)
+
+
+def predict_summary(markets):
+    """Canonical {highest_probability, best_ev_yes, best_ev_no} over a markets
+    list. The one place the dashboard, CLI, T-24 card, and alerts derive picks."""
+    for m in markets:
+        if "cal_ev_no" not in m:
+            apply_calibration(m)
+    probs = [m for m in markets if m.get("prob") is not None]
+    return {
+        "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
+        "best_ev_yes": best_yes_pick(markets),
+        "best_ev_no": best_no_pick(markets),
+    }
 
 
 def _log_nws_snapshot(data):
@@ -1736,7 +2029,7 @@ def predict_event(event_ticker):
     if data is None:
         raise LookupError_(f"unsupported series: {ev['series_ticker']}")
     _log_nws_snapshot(data)
-    probs = [m for m in data["markets"] if m.get("prob") is not None]
+    summary = predict_summary(data["markets"])
     return {
         "event_ticker": data["event_ticker"],
         "title": data["title"],
@@ -1746,11 +2039,9 @@ def predict_event(event_ticker):
         "model": data["model"],
         "settled": data["settled"],
         "settled_bucket": data["settled_bucket"],
-        "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
-        "best_ev_yes": max((m for m in data["markets"]
-                            if m.get("ev_yes") is not None and m["ev_yes"] >= MIN_BEST_EV),
-                           key=lambda m: m["ev_yes"], default=None),
-        "best_ev_no":  best_no_pick(data["markets"]),
+        "highest_probability": summary["highest_probability"],
+        "best_ev_yes": summary["best_ev_yes"],
+        "best_ev_no": summary["best_ev_no"],
         "markets": data["markets"],
     }
 
@@ -1764,8 +2055,8 @@ def cmd_predict(args):
     if data is None:
         sys.exit(f"unsupported series: {ev['series_ticker']}")
 
-    probs = [m for m in data["markets"] if m.get("prob") is not None]
     f = data["forecasts"]
+    summary = predict_summary(data["markets"])
 
     if args.json:
         out = {
@@ -1777,10 +2068,9 @@ def cmd_predict(args):
             "model": data["model"],
             "settled": data["settled"],
             "settled_bucket": data["settled_bucket"],
-            "highest_probability": (max(probs, key=lambda m: m["prob"]) if probs else None),
-            "best_ev_yes": (max((m for m in data["markets"] if m.get("ev_yes") is not None),
-                                key=lambda m: m["ev_yes"], default=None)),
-            "best_ev_no":  best_no_pick(data["markets"]),
+            "highest_probability": summary["highest_probability"],
+            "best_ev_yes": summary["best_ev_yes"],
+            "best_ev_no": summary["best_ev_no"],
             "markets": data["markets"],
         }
         print(json.dumps(out, indent=2))
@@ -1799,25 +2089,25 @@ def cmd_predict(args):
     if data["settled"]:
         print(f"SETTLED: {data['settled_bucket']}")
         return
-    if not probs:
+
+    top = summary["highest_probability"]
+    if top is None:
         return
 
-    top = max(probs, key=lambda m: m["prob"])
     print()
     print(f"Highest-probability bucket: {top['subtitle']}  ({top['prob']*100:.1f}%)")
     print(f"  ticker:   {top['ticker']}")
-    print(f"  YES ask:  ${_money(top['yes_ask'])}    EV: {_signed(top['ev_yes'])}")
-    print(f"  NO  ask:  ${_money(top['no_ask'])}     EV: {_signed(top['ev_no'])}")
+    print(f"  YES ask:  ${_money(top['yes_ask'])}    EV: {_signed(top['cal_ev_yes'])}")
+    print(f"  NO  ask:  ${_money(top['no_ask'])}     EV: {_signed(top['cal_ev_no'])}")
 
-    best_yes = max((m for m in data["markets"] if m.get("ev_yes") is not None),
-                   key=lambda m: m["ev_yes"], default=None)
-    best_no = best_no_pick(data["markets"])
+    best_yes = summary["best_ev_yes"]
+    best_no = summary["best_ev_no"]
     if best_yes and best_yes["ticker"] != top["ticker"]:
         print(f"Best EV YES: {best_yes['subtitle']} @ ${_money(best_yes['yes_ask'])} "
-              f"-> {_signed(best_yes['ev_yes'])} (model {best_yes['prob']*100:.1f}%)")
+              f"-> {_signed(best_yes['cal_ev_yes'])} (P {best_yes['cal_prob_yes']*100:.1f}%)")
     if best_no:
         print(f"Best EV NO:  {best_no['subtitle']} @ ${_money(best_no['no_ask'])} "
-              f"-> {_signed(best_no['ev_no'])} (model {(1-best_no['prob'])*100:.1f}% no)")
+              f"-> {_signed(best_no['cal_ev_no'])} (P_no {best_no['cal_prob_no']*100:.1f}%)")
 
 
 def _fmtf(v):  return "—" if v is None else f"{v:.1f}"

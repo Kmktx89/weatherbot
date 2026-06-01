@@ -9,6 +9,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import generate_t24_card as t24
+import kalshi_temp as kt
+
+
+@pytest.fixture(autouse=True)
+def _identity_calibration(monkeypatch):
+    """t24 card tests verify selection mechanics / rendering, not the
+    provisional production haircut. Pin calibration to identity so
+    cal_ev == ev and the canonical pickers reduce to raw-EV selection."""
+    identity = {"no": [{"lo": 0.0, "hi": 1.01, "h": 0.0}],
+                "yes": [{"lo": 0.0, "hi": 1.01, "h": 0.0}]}
+    monkeypatch.setattr(kt, "_CAL_PARAMS", identity)
 
 
 # -------- fixtures --------
@@ -181,7 +192,7 @@ def test_check_metar_sanity_warn():
 
 def test_predict_summary_highest_probability_is_max_prob():
     row = make_row()
-    s = t24.predict_summary(row["buckets"])
+    s = kt.predict_summary(row["buckets"])
     assert s["highest_probability"]["subtitle"] == "67° or below"  # 57.6%
 
 
@@ -190,7 +201,7 @@ def test_predict_summary_best_ev_no_respects_min_threshold():
     row = make_row()
     for b in row["buckets"]:
         b["ev_no"] = 0.01
-    s = t24.predict_summary(row["buckets"])
+    s = kt.predict_summary(row["buckets"])
     assert s["best_ev_no"] is None
 
 
@@ -205,7 +216,7 @@ def test_predict_summary_sanity_filter_drops_confident_no():
     # Zero out other NO EVs so target would otherwise win.
     for b in row["buckets"][1:]:
         b["ev_no"] = 0.0
-    s = t24.predict_summary(row["buckets"])
+    s = kt.predict_summary(row["buckets"])
     assert s["best_ev_no"] is None  # sanity-filtered
 
 
@@ -213,7 +224,7 @@ def test_predict_summary_printed_no_floor_drops_low_conviction():
     # Default top NO ("67° or below") has printed-NO = 1 - 0.576 = 0.424 < 0.80,
     # so the printed-NO floor drops it and no NO pick surfaces.
     row = make_row()
-    s = t24.predict_summary(row["buckets"])
+    s = kt.predict_summary(row["buckets"])
     assert s["best_ev_no"] is None
 
 
@@ -224,7 +235,7 @@ def test_predict_summary_matches_predict_event_logic():
     bs = row["buckets"]
     # add a high-conviction NO bucket that survives the printed-NO >= 0.80 floor
     bs.append({"ticker": "X-DEEP", "subtitle": "deep tail",
-               "yes_bid": 0.04, "yes_ask": 0.05, "no_bid": 0.95, "no_ask": 0.95,
+               "yes_bid": 0.04, "yes_ask": 0.05, "no_bid": 0.95, "no_ask": 0.83,
                "prob": 0.10, "ev_yes": -0.04, "ev_no": 0.07, "volume_24h": 1000})
     expected_top = max(bs, key=lambda b: b["prob"])
     expected_by  = max((b for b in bs if b["ev_yes"] >= 0.05),
@@ -233,7 +244,7 @@ def test_predict_summary_matches_predict_event_logic():
                         and not (b["yes_ask"] >= 0.85 and b["prob"] <= 0.40)
                         and (1 - b["prob"]) >= 0.80),
                        key=lambda b: b["ev_no"],  default=None)
-    s = t24.predict_summary(bs)
+    s = kt.predict_summary(bs)
     assert s["highest_probability"] == expected_top
     assert s["best_ev_yes"]         == expected_by
     assert s["best_ev_no"]          == expected_bn

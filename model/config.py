@@ -14,7 +14,7 @@ class ModelConfig:
     nws_blend: float                                     # 0.0 = no NWS overlay
     bias_table: Mapping[str, float]                      # series → bias offset (subtracted)
     base_sigma: float                                    # σ floor in °F
-    sigma_sources: tuple[str, ...]                       # which keys feed pstdev
+    sigma_sources: tuple[str, ...]                       # which keys feed the weighted-std spread
     today_max_mode: TodayMaxMode
     today_max_headroom: float                            # °F (e.g. 0.5)
     today_max_push: float                                # °F (only used if mode in {"push","both"})

@@ -21,10 +21,13 @@ from .data_cache import default as default_cache
 from .inputs import build_historical_inputs, fetch_bid_ask_at, winner_of
 
 
-# Same constants as kalshi_temp.py for parity.
-SANITY_MARKET_CONFIDENT_YES = 0.85
-SANITY_MODEL_LOW_PROB = 0.40
-MIN_BEST_EV = 0.05
+# Shared with kalshi_temp.py and the health scan (single source of truth) so
+# replay parity with the live/backtest selection can never silently drift.
+from wb_thresholds import (
+    MIN_BEST_EV,
+    SANITY_MARKET_CONFIDENT_YES,
+    SANITY_MODEL_LOW_PROB,
+)
 
 
 @dataclass

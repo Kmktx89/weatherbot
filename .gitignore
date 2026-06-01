@@ -224,12 +224,25 @@ lab/.cache.sqlite
 lab/.cache.sqlite-journal
 lab/.cache.sqlite-wal
 lab/.cache.sqlite-shm
+# live-path forecast cache (open-meteo / NWS / METAR resilience cache)
+forecast_cache.sqlite
+forecast_cache.sqlite-journal
+forecast_cache.sqlite-wal
+forecast_cache.sqlite-shm
 shadow_picks.jsonl
 live_picks_log.jsonl
 snapshot.err
 pushover_config.json
 alerts_sent_tickers.txt
+# lab-emitted runtime artifact; code default in kalshi_temp is canonical
+calibration_params.json
 
 # TLS material (generated locally by mkcert; never commit)
 weatherbot-cert.pem
 weatherbot-key.pem
+
+# hourly signal report (runtime artifact)
+hourly_signals.json
+
+# telegram bot supervisor log (WB-006 runtime artifact)
+telegram_bot.log
