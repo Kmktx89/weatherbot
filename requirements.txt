@@ -1,2 +1,5 @@
 requests>=2.31
 pytest>=8.0
+# WB-006 Telegram bot (long-polling command server). Pinned to v22.x — v22 is
+# async (ApplicationBuilder/run_polling); v13 is sync and the code would no-op.
+python-telegram-bot>=22,<23

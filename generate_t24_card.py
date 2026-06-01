@@ -361,12 +361,9 @@ def maybe_pushover(qc_summary, events, today_iso, blocked=False):
       - normal run (at least one event has picks): full digest of all picks,
         with missing events listed at the bottom
     Quietly no-ops if pushover_config.json is absent (matches alerts.py)."""
-    try:
-        from alerts import load_config, send_pushover
-    except ImportError:
-        return
-    cfg = load_config()
-    if cfg is None:
+    from notifiers import get_notifier
+    notifier = get_notifier()
+    if not notifier.available():
         return
     if blocked:
         title = f"weatherbot T-24h: BLOCKED {today_iso}"
@@ -376,12 +373,9 @@ def maybe_pushover(qc_summary, events, today_iso, blocked=False):
         body = build_digest_body(events)
         if not body.strip():
             return
-    try:
-        ok, resp = send_pushover(title, body, cfg)
-        if not ok:
-            print(f"[t24-card] pushover non-200: {resp[:200]}", file=sys.stderr)
-    except Exception as e:
-        print(f"[t24-card] pushover failed: {e}", file=sys.stderr)
+    ok, resp = notifier.send(title, body)
+    if not ok:
+        print(f"[t24-card] {notifier.name} send failed: {resp[:200]}", file=sys.stderr)
 
 
 def _summarize_qc(events):
@@ -396,22 +390,16 @@ def push_catchup(filled, today_iso):
     """One Pushover summarizing newly-filled events from an hourly catch-up
     run. Uses the same digest formatter as the morning report so the message
     style stays consistent."""
-    try:
-        from alerts import load_config, send_pushover
-    except ImportError:
-        return
-    cfg = load_config()
-    if cfg is None:
+    from notifiers import get_notifier
+    notifier = get_notifier()
+    if not notifier.available():
         return
     cities = ", ".join(e["city"] for e in filled)
     title = f"weatherbot T-24h catch-up — {cities}"
     body = "Late-arriving picks (missed at 9 AM digest):\n\n" + build_digest_body(filled)
-    try:
-        ok, resp = send_pushover(title, body, cfg)
-        if not ok:
-            print(f"[t24-card] catchup pushover non-200: {resp[:200]}", file=sys.stderr)
-    except Exception as e:
-        print(f"[t24-card] catchup pushover failed: {e}", file=sys.stderr)
+    ok, resp = notifier.send(title, body)
+    if not ok:
+        print(f"[t24-card] catchup {notifier.name} send failed: {resp[:200]}", file=sys.stderr)
 
 
 def catchup(now=None):

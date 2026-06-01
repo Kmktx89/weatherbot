@@ -141,9 +141,12 @@ def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
     Returns the number of events alerted on (0 on no-op / config-missing).
     """
     log = logger or (lambda m: print(m, file=sys.stderr))
-    cfg = load_config()
-    if cfg is None:
-        log("[alerts] no pushover_config.json; skipping")
+    # Transport is chosen by the NOTIFIER env switch (telegram | pushover);
+    # default pushover preserves the legacy path exactly (rollback).
+    from notifiers import get_notifier
+    notifier = get_notifier()
+    if not notifier.available():
+        log(f"[alerts] notifier '{notifier.name}' unavailable; skipping")
         return 0
 
     sent = _sent_tickers()
@@ -164,13 +167,13 @@ def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
     title = f"weatherbot T-24h ({len(qualifying)})"
     body = build_message(qualifying)
     try:
-        ok, resp = send_pushover(title, body, cfg)
+        ok, resp = notifier.send(title, body)
     except Exception as e:
-        log(f"[alerts] pushover request failed: {e}")
+        log(f"[alerts] {notifier.name} request failed: {e}")
         return 0
 
     if not ok:
-        log(f"[alerts] pushover non-200: {resp}")
+        log(f"[alerts] {notifier.name} send failed: {resp}")
         return 0
 
     for r in qualifying:

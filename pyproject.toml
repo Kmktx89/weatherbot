@@ -7,13 +7,16 @@ dependencies = ["requests>=2.31"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# WB-006: long-polling Telegram command bot (v22.x async API). The scheduled
+# push path is requests-only and does not need this.
+bot = ["python-telegram-bot>=22,<23"]
 
 [project.scripts]
 lab = "lab.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["model*", "lab*", "shadow*"]
+include = ["model*", "lab*", "shadow*", "notifiers*"]
 
 [build-system]
 requires = ["setuptools>=68"]
