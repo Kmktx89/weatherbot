@@ -192,6 +192,26 @@ def _forecast_cache_get():
     return _forecast_cache or None
 
 
+def _fc_read(cache, key, ttl):
+    """Cache read that degrades to a miss on any error. forecast_cache.sqlite is
+    written by two live processes (serve + snapshot); a contended read must fall
+    through to a network fetch, never propagate and drop a city's row."""
+    try:
+        return cache.get(key, ttl=ttl)
+    except Exception as e:
+        print(f"[forecast-cache] read failed ({key}): {e}", file=sys.stderr)
+        return None
+
+
+def _fc_write(cache, key, value, source, target_date):
+    """Cache write that swallows errors (sqlite contention) — a failed write just
+    means the next call refetches; it must never break the build."""
+    try:
+        cache.set(key, value, source=source, target_date=target_date)
+    except Exception as e:
+        print(f"[forecast-cache] write failed ({key}): {e}", file=sys.stderr)
+
+
 def _get_json_retry(url, params=None, *, timeout=FORECAST_TIMEOUT,
                     attempts=FORECAST_ATTEMPTS, label=""):
     """GET -> parsed JSON, retrying only transient connection/timeout errors with
@@ -284,7 +304,7 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
     cache = None if historical else _forecast_cache_get()
     ckey = f"live:open_meteo:{model}:{lat:.4f},{lon:.4f}:{target_date}"
     if cache is not None:
-        hit = cache.get(ckey, ttl=FORECAST_TTL)
+        hit = _fc_read(cache, ckey, FORECAST_TTL)
         if hit is not None:
             return hit.get("value")
     val = None
@@ -306,7 +326,7 @@ def fetch_open_meteo(lat, lon, target_date, model, *, historical=False):
         print(f"[open-meteo:{model}{':hist' if historical else ''}] {e}", file=sys.stderr)
         return None
     if cache is not None and val is not None:   # never cache a failed (None) fetch
-        cache.set(ckey, {"value": val}, source="live:open_meteo", target_date=target_date)
+        _fc_write(cache, ckey, {"value": val}, "live:open_meteo", target_date)
     return val
 
 
@@ -345,7 +365,7 @@ def fetch_nws_high(lat, lon, target_date):
     cache = _forecast_cache_get()
     ckey = f"live:nws:{lat:.4f},{lon:.4f}:{target_date}"
     if cache is not None:
-        hit = cache.get(ckey, ttl=FORECAST_TTL)
+        hit = _fc_read(cache, ckey, FORECAST_TTL)
         if hit is not None:
             return hit.get("value")
     val = None
@@ -366,7 +386,7 @@ def fetch_nws_high(lat, lon, target_date):
         print(f"[nws] {e}", file=sys.stderr)
         return None
     if cache is not None and val is not None:
-        cache.set(ckey, {"value": val}, source="live:nws", target_date=target_date)
+        _fc_write(cache, ckey, {"value": val}, "live:nws", target_date)
     return val
 
 
@@ -374,7 +394,7 @@ def fetch_metar_temp(icao):
     cache = _forecast_cache_get()
     ckey = f"live:metar:{icao}"
     if cache is not None:
-        hit = cache.get(ckey, ttl=METAR_TTL)
+        hit = _fc_read(cache, ckey, METAR_TTL)
         if hit is not None:
             return hit.get("value")
     val = None
@@ -387,7 +407,7 @@ def fetch_metar_temp(icao):
         print(f"[metar:{icao}] {e}", file=sys.stderr)
         return None
     if cache is not None and val is not None:
-        cache.set(ckey, {"value": val}, source="live:metar", target_date=None)
+        _fc_write(cache, ckey, {"value": val}, "live:metar", None)
     return val
 
 
@@ -396,7 +416,7 @@ def fetch_metar_today_max(icao, hours=10):
     cache = _forecast_cache_get()
     ckey = f"live:metar_max:{icao}:{hours}"
     if cache is not None:
-        hit = cache.get(ckey, ttl=METAR_TTL)
+        hit = _fc_read(cache, ckey, METAR_TTL)
         if hit is not None:
             return hit.get("value")
     val = None
@@ -411,7 +431,7 @@ def fetch_metar_today_max(icao, hours=10):
         print(f"[metar-window:{icao}] {e}", file=sys.stderr)
         return None
     if cache is not None and val is not None:
-        cache.set(ckey, {"value": val}, source="live:metar_max", target_date=None)
+        _fc_write(cache, ckey, {"value": val}, "live:metar_max", None)
     return val
 
 

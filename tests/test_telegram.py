@@ -114,6 +114,54 @@ def test_get_notifier_switch(monkeypatch):
     assert isinstance(get_notifier(), PushoverNotifier)   # unknown -> safe default
 
 
+class _RecordingNotifier:
+    name = "recording"
+
+    def __init__(self):
+        self.sent = []
+
+    def available(self):
+        return True
+
+    def send(self, title, message):
+        self.sent.append((title, message))
+        return True, "ok"
+
+
+def test_send_t24_alerts_routes_through_notifier(monkeypatch, tmp_path):
+    """Integration: the rerouted alert path builds the message and sends via
+    get_notifier() (not a hardcoded Pushover call), and dedup still works."""
+    monkeypatch.chdir(tmp_path)          # isolate alerts_sent_tickers.txt
+    import notifiers
+    import alerts
+    rec = _RecordingNotifier()
+    monkeypatch.setattr(notifiers, "get_notifier", lambda *a, **k: rec)
+    row = {"event_ticker": "KXHIGHNY-26JUN01", "series": "KXHIGHNY",
+           "target_date": "2026-06-01", "lead_hours": 24.0, "settled": False,
+           "model": {"mu": 70.0, "sigma": 1.0}, "buckets": []}
+    n = alerts.send_t24_alerts([row])
+    assert n == 1
+    assert len(rec.sent) == 1
+    title, body = rec.sent[0]
+    assert "T-24h" in title and "NY" in body
+    # dedup: same ticker does not fire again
+    assert alerts.send_t24_alerts([row]) == 0
+    assert len(rec.sent) == 1
+
+
+def test_notify_paths_no_crash_when_unavailable(monkeypatch, tmp_path):
+    """Proves the lazy alerts->notifiers->pushover->alerts import chain resolves
+    at runtime (no cycle / typo) and both rewritten paths no-op cleanly when the
+    transport is unavailable (no pushover_config.json / no .env here)."""
+    monkeypatch.chdir(tmp_path)
+    import alerts
+    import generate_t24_card as g
+    assert alerts.send_t24_alerts([]) == 0
+    g.maybe_pushover(None, [], "2026-06-01")        # must not raise
+    g.maybe_pushover(None, [], "2026-06-01", blocked=True)
+    g.push_catchup([], "2026-06-01")                # must not raise
+
+
 def test_telegram_notifier_unavailable_without_creds(monkeypatch):
     import wb_config
     monkeypatch.setattr(wb_config, "get", lambda k, d=None: None)
