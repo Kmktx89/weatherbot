@@ -400,6 +400,7 @@ def run_health_scan(days: int = 14, log_path: str = lc.LOG_PATH, cache=None,
     readings: list[MetricReading] = []
     readings += calibration_readings(records, deployed_no_haircut=kt.haircut_for("no", 0.85))
     readings += bias_drift_readings(days=max(days, 60))
+    readings += bias_resid_live_readings(days=max(days, 60), log_path=log_path)
     for series, (k, n) in dispersion_by_city(days=max(days, 60), cache=cache).items():
         readings.append(MetricReading(
             name=f"dispersion_k_{series}",

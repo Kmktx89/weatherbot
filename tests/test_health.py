@@ -156,6 +156,9 @@ def test_run_health_scan_assembles_report(monkeypatch):
                         lambda records, deployed_no_haircut: [
                             MetricReading("calibration_yes", -2.0, "t", "OK", 40, "")])
     monkeypatch.setattr(h, "bias_drift_readings", lambda days: [])
+    monkeypatch.setattr(h, "bias_resid_live_readings",
+                        lambda days, log_path=None: [
+                            MetricReading("bias_resid_live_pooled", -0.5, "t", "OK", 40, "")])
     monkeypatch.setattr(h, "dispersion_by_city",
                         lambda days, cache=None: {"KXHIGHLAX": (0.46, 53)})
     monkeypatch.setattr(h, "_opportunity_records", lambda rows, cache=None: [])
@@ -164,6 +167,7 @@ def test_run_health_scan_assembles_report(monkeypatch):
     names = {r.name for r in rep.readings}
     assert "calibration_yes" in names and "dispersion_k_KXHIGHLAX" in names
     assert rep.days == 14
+    assert "bias_resid_live_pooled" in names
 
 
 def test_write_report_only_touches_the_two_docs(tmp_path):
