@@ -84,3 +84,28 @@ changed; fill the stub in. Template:
   deploy. Pure refactor (no behavior change), but it touches kalshi_temp.py so the
   deployed-model fingerprint shifts — expected.
 - commit: _set on commit_
+
+## 2026-06-01 — live-path bias monitoring (fix bias_drift blind spot)
+- change: renamed health metric `bias_drift_<series>` -> `bias_drift_replay_<series>`
+  (+ note "no-NWS replay refit (excl. live NWS overlay)") to stop it overclaiming
+  live coverage; added network-free `bias_resid_live_<series>` + `bias_resid_live_pooled`
+  measuring the live NWS-blended μ (nearest-T24 snapshot) vs settled-bucket midpoints.
+  Detection only. New thresholds (`BIAS_RESID_WATCH=0.5`, `BIAS_RESID_ALERT=1.5`,
+  `BIAS_RESID_POOLED_MIN_N=30`) in `wb_thresholds`; `classify_abs` gained an
+  overrideable `min_n` kwarg so the pooled gate routes through the shared classifier.
+- why: `health._refit_bias` -> `refit_bias.refit(LIVE_TODAY)` -> `build_historical_inputs`
+  hard-codes `nws=None` (`lab/inputs.py:113`), so `bias_drift` was structurally blind
+  to the live 30% NWS overlay; nothing measured live-path bias. Per-city is noise at
+  this n (CI ±2°F); pooled is the early-warning aggregate. Spec/plan:
+  `docs/superpowers/specs|plans/2026-06-01-live-path-bias-monitoring.*`.
+- validation: full pytest suite green (210; new threshold/parser/health tests
+  RED-confirmed first, incl. adversarial-review fixes — pooled OK/ALERT branches,
+  unrounded-mean classification, lead boundary). Real end-to-end `lab.cli health`
+  (against the live log) exits 0, emits the renamed metric + new readings, no crash,
+  no doc written. Live readings reconcile with an independent throwaway join
+  (pooled -0.54/n=46 vs -0.50/n=43; CHI/LAX/MIA/DEN per-city match): per-city all
+  INSUFFICIENT_DATA (n=4-8 < 30), pooled WATCH at -0.54°F (faint warm tilt, just past
+  the 0.5 line).
+- deployed-or-held: HELD on lab branch (`worktree-model-notes-live-bias-finding`)
+  pending human-gated deploy.
+- commit: _set on commit_
