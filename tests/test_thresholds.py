@@ -25,6 +25,9 @@ def test_canonical_values_pinned():
     assert T.BIAS_WATCH == 0.5
     assert T.BIAS_ALERT == 1.0
     assert T.OPP_EDGE_MIN == 0.05
+    assert T.BIAS_RESID_WATCH == 0.5
+    assert T.BIAS_RESID_ALERT == 1.5
+    assert T.BIAS_RESID_POOLED_MIN_N == 30
 
 
 def test_kalshi_temp_reexports_shared():
@@ -57,6 +60,9 @@ def test_lab_health_reexports_shared():
     assert h.BIAS_WATCH == T.BIAS_WATCH
     assert h.BIAS_ALERT == T.BIAS_ALERT
     assert h.OPP_EDGE_MIN == T.OPP_EDGE_MIN
+    assert h.BIAS_RESID_WATCH == T.BIAS_RESID_WATCH
+    assert h.BIAS_RESID_ALERT == T.BIAS_RESID_ALERT
+    assert h.BIAS_RESID_POOLED_MIN_N == T.BIAS_RESID_POOLED_MIN_N
 
 
 def test_lab_configs_base_sigma_is_shared():
