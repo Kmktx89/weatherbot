@@ -200,6 +200,64 @@ def bias_drift_readings(days: int) -> list[MetricReading]:
     return out
 
 
+def bias_resid_live_readings(days: int, log_path: str = lc.LOG_PATH) -> list[MetricReading]:
+    """Live-path bias residual: realized high (settled-bucket midpoint) minus the
+    live NWS-blended mu at the nearest-T24 snapshot, per series + pooled.
+
+    Network-free (reads only the snapshot log). Measures what
+    bias_drift_replay_* structurally CANNOT — the live NWS overlay's effect on mu.
+    Sign: negative => mu runs hot (over-forecasts).
+    """
+    import kalshi_temp as kt
+    rows = lc.read_log(log_path, since_days=max(days, 60))
+    by_series: dict[str, list[float]] = defaultdict(list)
+    for ev, rs in lc._by_event(rows).items():
+        sb = next((r["settled_bucket"] for r in rs if r.get("settled_bucket")), None)
+        actual, kind = lc.bucket_midpoint(sb)
+        if actual is None or kind != "interior":
+            continue
+        preds = [r for r in rs
+                 if (r.get("model") or {}).get("mu") is not None
+                 and r.get("lead_hours") is not None]
+        if not preds:
+            continue
+        row = min(preds, key=lambda r: abs(r["lead_hours"] - 24.0))
+        if abs(row["lead_hours"] - 24.0) > 12.0:
+            continue
+        by_series[ev.split("-")[0]].append(actual - row["model"]["mu"])
+
+    out: list[MetricReading] = []
+    pooled: list[float] = []
+    for series in sorted(kt.BIAS):
+        resids = by_series.get(series, [])
+        pooled.extend(resids)
+        n = len(resids)
+        mean = round(statistics.mean(resids), 2) if resids else None
+        status = (classify_abs(mean, n=n, watch=BIAS_RESID_WATCH, alert=BIAS_RESID_ALERT)
+                  if mean is not None else "INSUFFICIENT_DATA")
+        out.append(MetricReading(
+            name=f"bias_resid_live_{series}", value=mean,
+            threshold="|actual − live μ| <= 0.5°F", status=status, n=n,
+            note=("live NWS-blended μ vs settled-bucket midpoint @≈T-24; neg ⇒ μ runs hot"
+                  if mean is not None else "no settled interior pairs")))
+
+    pn = len(pooled)
+    pmean = round(statistics.mean(pooled), 2) if pooled else None
+    if pmean is None or pn < BIAS_RESID_POOLED_MIN_N:
+        pstatus = "INSUFFICIENT_DATA"
+    elif abs(pmean) <= BIAS_RESID_WATCH:
+        pstatus = "OK"
+    elif abs(pmean) <= BIAS_RESID_ALERT:
+        pstatus = "WATCH"
+    else:
+        pstatus = "ALERT"
+    out.append(MetricReading(
+        name="bias_resid_live_pooled", value=pmean,
+        threshold="|actual − live μ| <= 0.5°F", status=pstatus, n=pn,
+        note="early-warning aggregate; NOT a correction — see per-city before acting"))
+    return out
+
+
 def scan_opportunities(records: list[dict]) -> list[Opportunity]:
     """Flag per-series unexploited YES edge.
 

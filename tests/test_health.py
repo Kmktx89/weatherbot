@@ -4,7 +4,7 @@ from dataclasses import dataclass as _dc
 from lab.health import (
     MetricReading, Opportunity, HealthReport,
     MIN_N, classify_abs, classify_k,
-    dispersion_k, calibration_readings, bias_drift_readings,
+    dispersion_k, calibration_readings, bias_drift_readings, bias_resid_live_readings,
     scan_opportunities, render_report, detect_deployed_change,
     run_health_scan, write_report, HEALTH_PATH, CHANGES_PATH,
     _opportunity_records,
@@ -209,3 +209,45 @@ def test_detect_deployed_change_record_false_does_not_write(tmp_path):
     # record=True (default) still writes
     assert detect_deployed_change(str(marker), fingerprint="abc") is True
     assert marker.read_text().strip() == "abc"
+
+
+def test_bias_resid_live_per_city_and_pooled(monkeypatch):
+    import lab.health as h
+    import kalshi_temp as kt
+    monkeypatch.setattr(kt, "BIAS", {"KXHIGHAUS": -1.81, "KXHIGHMIA": -1.52})
+    # 35 distinct AUS events: actual 94.5, mu 95.5 -> resid -1.0 each.
+    rows = [{
+        "event_ticker": f"KXHIGHAUS-26JUN{n:02d}", "lead_hours": 24.0,
+        "settled_bucket": "94° to 95°", "model": {"mu": 95.5},
+    } for n in range(1, 36)]
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: rows)
+    by = {r.name: r for r in bias_resid_live_readings(days=60, log_path="x")}
+    assert by["bias_resid_live_KXHIGHAUS"].value == _approx(-1.0)
+    assert by["bias_resid_live_KXHIGHAUS"].n == 35
+    assert by["bias_resid_live_KXHIGHAUS"].status == "WATCH"   # 0.5 < 1.0 <= 1.5
+    # MIA has no rows -> INSUFFICIENT_DATA, value None
+    assert by["bias_resid_live_KXHIGHMIA"].status == "INSUFFICIENT_DATA"
+    assert by["bias_resid_live_KXHIGHMIA"].value is None
+    # pooled = mean of all interior resids (35 x -1.0), n=35 >= 30 -> WATCH
+    assert by["bias_resid_live_pooled"].value == _approx(-1.0)
+    assert by["bias_resid_live_pooled"].n == 35
+    assert by["bias_resid_live_pooled"].status == "WATCH"
+    assert "see per-city" in by["bias_resid_live_pooled"].note
+
+
+def test_bias_resid_live_excludes_open_ended_and_off_lead(monkeypatch):
+    import lab.health as h
+    import kalshi_temp as kt
+    monkeypatch.setattr(kt, "BIAS", {"KXHIGHLAX": -0.55})
+    rows = [
+        {"event_ticker": "KXHIGHLAX-26JUN01", "lead_hours": 24.0,
+         "settled_bucket": "95° or above", "model": {"mu": 96.0}},   # open-ended -> excluded
+        {"event_ticker": "KXHIGHLAX-26JUN02", "lead_hours": 40.0,
+         "settled_bucket": "80° to 81°", "model": {"mu": 79.0}},     # |40-24|=16 > 12 -> excluded
+    ]
+    monkeypatch.setattr(h.lc, "read_log", lambda path, since_days=None: rows)
+    by = {r.name: r for r in bias_resid_live_readings(days=60, log_path="x")}
+    assert by["bias_resid_live_KXHIGHLAX"].n == 0
+    assert by["bias_resid_live_KXHIGHLAX"].status == "INSUFFICIENT_DATA"
+    assert by["bias_resid_live_pooled"].n == 0
+    assert by["bias_resid_live_pooled"].status == "INSUFFICIENT_DATA"
