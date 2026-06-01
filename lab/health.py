@@ -62,9 +62,10 @@ class HealthReport:
 
 
 def classify_abs(value_pp: float, *, n: int,
-                 watch: float = CAL_WATCH_PP, alert: float = CAL_ALERT_PP) -> str:
+                 watch: float = CAL_WATCH_PP, alert: float = CAL_ALERT_PP,
+                 min_n: int = MIN_N) -> str:
     """Status for a signed pp value judged on its magnitude."""
-    if n < MIN_N:
+    if n < min_n:
         return "INSUFFICIENT_DATA"
     a = abs(value_pp)
     if a <= watch:
@@ -232,9 +233,10 @@ def bias_resid_live_readings(days: int, log_path: str = lc.LOG_PATH) -> list[Met
         resids = by_series.get(series, [])
         pooled.extend(resids)
         n = len(resids)
-        mean = round(statistics.mean(resids), 2) if resids else None
-        status = (classify_abs(mean, n=n, watch=BIAS_RESID_WATCH, alert=BIAS_RESID_ALERT)
-                  if mean is not None else "INSUFFICIENT_DATA")
+        raw = statistics.mean(resids) if resids else None
+        mean = round(raw, 2) if raw is not None else None
+        status = (classify_abs(raw, n=n, watch=BIAS_RESID_WATCH, alert=BIAS_RESID_ALERT)
+                  if raw is not None else "INSUFFICIENT_DATA")
         out.append(MetricReading(
             name=f"bias_resid_live_{series}", value=mean,
             threshold="|actual − live μ| <= 0.5°F", status=status, n=n,
@@ -242,15 +244,11 @@ def bias_resid_live_readings(days: int, log_path: str = lc.LOG_PATH) -> list[Met
                   if mean is not None else "no settled interior pairs")))
 
     pn = len(pooled)
-    pmean = round(statistics.mean(pooled), 2) if pooled else None
-    if pmean is None or pn < BIAS_RESID_POOLED_MIN_N:
-        pstatus = "INSUFFICIENT_DATA"
-    elif abs(pmean) <= BIAS_RESID_WATCH:
-        pstatus = "OK"
-    elif abs(pmean) <= BIAS_RESID_ALERT:
-        pstatus = "WATCH"
-    else:
-        pstatus = "ALERT"
+    praw = statistics.mean(pooled) if pooled else None
+    pmean = round(praw, 2) if praw is not None else None
+    pstatus = ("INSUFFICIENT_DATA" if praw is None
+               else classify_abs(praw, n=pn, watch=BIAS_RESID_WATCH,
+                                 alert=BIAS_RESID_ALERT, min_n=BIAS_RESID_POOLED_MIN_N))
     out.append(MetricReading(
         name="bias_resid_live_pooled", value=pmean,
         threshold="|actual − live μ| <= 0.5°F", status=pstatus, n=pn,
