@@ -243,3 +243,6 @@ weatherbot-key.pem
 
 # hourly signal report (runtime artifact)
 hourly_signals.json
+
+# telegram bot supervisor log (WB-006 runtime artifact)
+telegram_bot.log
