@@ -175,3 +175,12 @@ def test_calibrate_by_lead_bins_rows(monkeypatch):
     assert out[(0, 12)]["yes"].n_bets == 1
     assert out[(12, 24)]["yes"].n_bets == 0
     assert out[(24, 36)]["yes"].realized_rate == pytest.approx(1.0)  # WIN won
+
+
+def test_bucket_midpoint_interior_open_ended_and_junk():
+    assert lc.bucket_midpoint("94° to 95°") == (94.5, "interior")
+    assert lc.bucket_midpoint("70° or above") == (71.0, "open")
+    assert lc.bucket_midpoint("69° or below") == (68.0, "open")
+    assert lc.bucket_midpoint("") == (None, None)
+    assert lc.bucket_midpoint(None) == (None, None)
+    assert lc.bucket_midpoint("nonsense") == (None, None)
