@@ -150,16 +150,15 @@ def test_send_t24_alerts_routes_through_notifier(monkeypatch, tmp_path):
 
 
 def test_notify_paths_no_crash_when_unavailable(monkeypatch, tmp_path):
-    """Proves the lazy alerts->notifiers->pushover->alerts import chain resolves
-    at runtime (no cycle / typo) and both rewritten paths no-op cleanly when the
-    transport is unavailable (no pushover_config.json / no .env here)."""
+    """Both rewritten notify paths no-op cleanly when the Telegram transport is
+    unavailable (no .env creds here) — no raise, no cycle."""
     monkeypatch.chdir(tmp_path)
     import alerts
     import generate_t24_card as g
     assert alerts.send_t24_alerts([]) == 0
-    g.maybe_pushover(None, [], "2026-06-01")        # must not raise
-    g.maybe_pushover(None, [], "2026-06-01", blocked=True)
-    g.push_catchup([], "2026-06-01")                # must not raise
+    g.maybe_notify(None, [], "2026-06-01")        # must not raise
+    g.maybe_notify(None, [], "2026-06-01", blocked=True)
+    g.push_catchup([], "2026-06-01")              # must not raise
 
 
 def test_telegram_notifier_unavailable_without_creds(monkeypatch):
