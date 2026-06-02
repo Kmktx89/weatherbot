@@ -113,6 +113,6 @@ changed; fill the stub in. Template:
   (pooled -0.54/n=46 vs -0.50/n=43; CHI/LAX/MIA/DEN per-city match): per-city all
   INSUFFICIENT_DATA (n=4-8 < 30), pooled WATCH at -0.54°F (faint warm tilt, just past
   the 0.5 line).
-- deployed-or-held: HELD on lab branch (`worktree-model-notes-live-bias-finding`)
-  pending human-gated deploy.
-- commit: _set on commit_
+- deployed-or-held: deployed to model-lab 2026-06-01 (PR #4 merged to main, then
+  cherry-picked to model-lab).
+- commit: 40aff80..1ddedd1 (model-lab); PR #4 -> main
