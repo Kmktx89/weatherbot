@@ -8,9 +8,9 @@ t24_cards/<today-ET>.json.
 
 Designed to run once daily at 13:00 UTC via Windows Task Scheduler, well
 past every KXHIGH city's T-24h moment. On every successful run, one
-Pushover fires with a digest of all events' Predict-button picks (matching
-the /t24 dashboard card). Missing events are noted in the digest body.
-A separate "BLOCKED" Pushover fires only in the catastrophic case where
+Telegram notification fires with a digest of all events' Predict-button picks
+(matching the /t24 dashboard card). Missing events are noted in the digest body.
+A separate "BLOCKED" notification fires only in the catastrophic case where
 every event errored (previous day's archive is then kept). Soft warnings
 render as badges on the dashboard card.
 
@@ -309,7 +309,7 @@ def _fmt_money(a):
 
 
 def format_digest_event(ev):
-    """One event's 3-5 line block for the daily Pushover digest. Mirrors the
+    """One event's 3-5 line block for the daily notification digest. Mirrors the
     Predict-button summary the /t24 dashboard page shows."""
     city = ev["city"]
     top = ev.get("highest_probability")
@@ -341,7 +341,7 @@ def format_digest_event(ev):
 
 
 def build_digest_body(events):
-    """Assemble the full Pushover body from the archive's events list. Picks
+    """Assemble the full notification body from the archive's events list. Picks
     are rendered per event; missing events are noted at the bottom."""
     blocks, missing = [], []
     for ev in events:
@@ -355,12 +355,12 @@ def build_digest_body(events):
     return body
 
 
-def maybe_pushover(qc_summary, events, today_iso, blocked=False):
-    """Daily Pushover:
+def maybe_notify(qc_summary, events, today_iso, blocked=False):
+    """Daily notification:
       - blocked run (every event errored): short BLOCKED notice
       - normal run (at least one event has picks): full digest of all picks,
         with missing events listed at the bottom
-    Quietly no-ops if pushover_config.json is absent (matches alerts.py)."""
+    Quietly no-ops if the Telegram transport is unavailable (matches alerts.py)."""
     from notifiers import get_notifier
     notifier = get_notifier()
     if not notifier.available():
@@ -387,7 +387,7 @@ def _summarize_qc(events):
 
 
 def push_catchup(filled, today_iso):
-    """One Pushover summarizing newly-filled events from an hourly catch-up
+    """One notification summarizing newly-filled events from an hourly catch-up
     run. Uses the same digest formatter as the morning report so the message
     style stays consistent."""
     from notifiers import get_notifier
@@ -407,7 +407,7 @@ def catchup(now=None):
     archive, try to resolve it with a wider lead band (LEAD_BAND_CATCHUP_HOURS)
     against the latest snapshot log. If anything fills in, rewrite the
     archive (events list + qc_summary + updated_at), append a catch-up log
-    line, and fire one Pushover with the newly-filled events.
+    line, and fire one notification with the newly-filled events.
 
     Safe to call from snapshot.py after every hourly write: no-ops cleanly
     when today's archive doesn't exist yet, has no missing events, or has
@@ -526,7 +526,7 @@ def main():
             "events": events,
         })
         print(f"[t24-card] BLOCKED for {today_iso}: every event errored", file=sys.stderr)
-        maybe_pushover(qc_summary, events, today_iso, blocked=True)
+        maybe_notify(qc_summary, events, today_iso, blocked=True)
         return 0
 
     archive = CARDS_DIR / f"{today_iso}.json"
@@ -541,7 +541,7 @@ def main():
         f"{err_count} error(s) -> {archive}",
         file=sys.stderr,
     )
-    maybe_pushover(qc_summary, events, today_iso, blocked=False)
+    maybe_notify(qc_summary, events, today_iso, blocked=False)
     return 0
 
 

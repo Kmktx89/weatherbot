@@ -1,50 +1,27 @@
-"""alerts.py — Batched T-24h Pushover alerts for active KXHIGH events.
+"""alerts.py — Batched T-24h alerts for active KXHIGH events.
 
 Called from snapshot.py after each hourly fire. Filters the just-written
 rows to those whose lead_hours sits in the T-24h window (23.5h to 24.5h),
 formats a per-event card with calibration-adjusted YES + NO recommendations
-following MODEL_NOTES.md tables, and POSTs a single batched alert.
-
-Token config (gitignored): pushover_config.json at project root —
-    {"user_key": "...", "api_token": "..."}
-Get the user_key from https://pushover.net dashboard; create an application
-token at https://pushover.net/apps/build.
+following MODEL_NOTES.md tables, and sends a single batched alert via the
+Telegram transport (notifiers.get_notifier()).
 
 Dedup: alerts_sent_tickers.txt — append-only, one event_ticker per line.
 Each event_ticker fires at most one alert in its lifetime.
 
-If pushover_config.json is absent or invalid the module logs and no-ops; it
-never raises out to the caller.
+If the transport is unavailable (no TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)
+the module logs and no-ops; it never raises out to the caller.
 """
-import json
 import sys
 from pathlib import Path
-
-import requests
 
 import kalshi_temp as kt
 
 
-PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
-CONFIG_PATH = Path("pushover_config.json")
 SENT_PATH = Path("alerts_sent_tickers.txt")
 T24_WINDOW = (23.5, 24.5)
 TAKE_EV_THRESHOLD = 0.05    # ≥ 5¢ calibrated EV → TAKE
 SPREAD_FLAG = 0.05          # yes spread > 5¢ → flag in alert
-
-
-def load_config():
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(cfg, dict):
-        return None
-    if not cfg.get("user_key") or not cfg.get("api_token"):
-        return None
-    return cfg
 
 
 def _sent_tickers() -> set[str]:
@@ -123,26 +100,13 @@ def build_message(rows: list[dict]) -> str:
     return "\n\n".join(format_card(r) for r in rows)
 
 
-def send_pushover(title: str, message: str, cfg: dict,
-                  *, priority: int = 0, timeout: float = 10.0) -> tuple[bool, str]:
-    resp = requests.post(PUSHOVER_URL, data={
-        "token": cfg["api_token"],
-        "user": cfg["user_key"],
-        "title": title,
-        "message": message,
-        "priority": priority,
-    }, timeout=timeout)
-    return resp.status_code == 200, resp.text
-
-
 def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
     """Filter rows to T-24h window, dedup by ticker, fire one batched alert.
 
     Returns the number of events alerted on (0 on no-op / config-missing).
     """
     log = logger or (lambda m: print(m, file=sys.stderr))
-    # Transport is chosen by the NOTIFIER env switch (telegram | pushover);
-    # default pushover preserves the legacy path exactly (rollback).
+    # Single transport (Telegram) via the notifier factory.
     from notifiers import get_notifier
     notifier = get_notifier()
     if not notifier.available():
@@ -187,7 +151,7 @@ def send_t24_alerts(rows: list[dict], *, logger=None) -> int:
 
 if __name__ == "__main__":
     # Smoke utility: format the most recent N rows from the snapshot log to
-    # stdout (no Pushover send). Use this to eyeball the card format.
+    # stdout (no notification sent). Use this to eyeball the card format.
     import sys as _sys
     try:
         _sys.stdout.reconfigure(encoding="utf-8")

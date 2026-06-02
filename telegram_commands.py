@@ -78,8 +78,7 @@ def cmd_help() -> str:
 
 def cmd_status() -> str:
     """System status from on-disk artifacts only (no network)."""
-    import wb_config
-    lines = ["weatherbot status", f"notifier: {wb_config.notifier_name()}"]
+    lines = ["weatherbot status"]
     try:
         import signals
         rep = signals.read_report_payload(SIGNALS_PATH)

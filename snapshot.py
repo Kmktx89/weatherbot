@@ -108,7 +108,7 @@ def main() -> int:
         print(f"[alerts] {e}", file=sys.stderr)
 
     # Catch-up: if today's morning digest left any events as "missing", try
-    # to fill them now using this hour's snapshot. Fires its own Pushover
+    # to fill them now using this hour's snapshot. Fires its own notification
     # only when something actually gets filled.
     try:
         from generate_t24_card import catchup

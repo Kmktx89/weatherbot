@@ -32,7 +32,7 @@ def test_cmd_status_reads_artifacts(tmp_path, monkeypatch):
         encoding="utf-8")
     out = cmds.cmd_status()
     assert "weatherbot status" in out
-    assert "notifier:" in out
+    assert "notifier:" not in out
     assert "12 open events" in out
     assert "2026-06-01" in out          # health doc timestamp surfaced
 
@@ -102,16 +102,16 @@ def test_cmd_predict_formats_live_event(monkeypatch):
 
 # ---------- NOTIFIER switch ----------
 
-def test_get_notifier_switch(monkeypatch):
-    import importlib
-    import wb_config
-    monkeypatch.setattr(wb_config, "notifier_name", lambda: "telegram")
-    from notifiers import get_notifier, TelegramNotifier, PushoverNotifier
+def test_get_notifier_is_telegram():
+    from notifiers import get_notifier, TelegramNotifier
     assert isinstance(get_notifier(), TelegramNotifier)
-    monkeypatch.setattr(wb_config, "notifier_name", lambda: "pushover")
-    assert isinstance(get_notifier(), PushoverNotifier)
-    monkeypatch.setattr(wb_config, "notifier_name", lambda: "bogus")
-    assert isinstance(get_notifier(), PushoverNotifier)   # unknown -> safe default
+    assert isinstance(get_notifier("telegram"), TelegramNotifier)
+
+
+def test_get_notifier_pushover_name_now_telegram():
+    # Pushover removed: even the legacy name resolves to Telegram.
+    from notifiers import get_notifier, TelegramNotifier
+    assert isinstance(get_notifier("pushover"), TelegramNotifier)
 
 
 class _RecordingNotifier:
@@ -129,8 +129,8 @@ class _RecordingNotifier:
 
 
 def test_send_t24_alerts_routes_through_notifier(monkeypatch, tmp_path):
-    """Integration: the rerouted alert path builds the message and sends via
-    get_notifier() (not a hardcoded Pushover call), and dedup still works."""
+    """Integration: the alert path builds the message and sends via the
+    get_notifier() abstraction, and dedup still works."""
     monkeypatch.chdir(tmp_path)          # isolate alerts_sent_tickers.txt
     import notifiers
     import alerts
@@ -150,16 +150,15 @@ def test_send_t24_alerts_routes_through_notifier(monkeypatch, tmp_path):
 
 
 def test_notify_paths_no_crash_when_unavailable(monkeypatch, tmp_path):
-    """Proves the lazy alerts->notifiers->pushover->alerts import chain resolves
-    at runtime (no cycle / typo) and both rewritten paths no-op cleanly when the
-    transport is unavailable (no pushover_config.json / no .env here)."""
+    """Both rewritten notify paths no-op cleanly when the Telegram transport is
+    unavailable (no .env creds here) — no raise, no cycle."""
     monkeypatch.chdir(tmp_path)
     import alerts
     import generate_t24_card as g
     assert alerts.send_t24_alerts([]) == 0
-    g.maybe_pushover(None, [], "2026-06-01")        # must not raise
-    g.maybe_pushover(None, [], "2026-06-01", blocked=True)
-    g.push_catchup([], "2026-06-01")                # must not raise
+    g.maybe_notify(None, [], "2026-06-01")        # must not raise
+    g.maybe_notify(None, [], "2026-06-01", blocked=True)
+    g.push_catchup([], "2026-06-01")              # must not raise
 
 
 def test_telegram_notifier_unavailable_without_creds(monkeypatch):
@@ -209,4 +208,4 @@ def test_status_handler_answers_with_stub_token():
 
     asyncio.run(status_h.callback(FakeUpdate(), FakeCtx()))
     assert "weatherbot status" in captured["text"]
-    assert "notifier:" in captured["text"]
+    assert "notifier:" not in captured["text"]

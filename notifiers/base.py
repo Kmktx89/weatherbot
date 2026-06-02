@@ -1,5 +1,5 @@
-"""Notifier interface — the single contract scheduled pushes go through, so the
-transport (Pushover vs Telegram) is swappable via the NOTIFIER env switch."""
+"""Notifier interface — the single contract scheduled pushes go through.
+Telegram is the only transport (Pushover was removed 2026-06-01)."""
 from abc import ABC, abstractmethod
 
 

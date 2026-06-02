@@ -1,15 +1,12 @@
-"""Notifier factory. `get_notifier()` selects the transport from the NOTIFIER
-env switch (telegram | pushover). Unknown/unset -> pushover (safe rollback)."""
-import wb_config
+"""Notifier factory. Telegram is the sole transport; `get_notifier()` always
+returns it. (Pushover was removed 2026-06-01 — it was non-functional.)"""
 from notifiers.base import Notifier
-from notifiers.pushover import PushoverNotifier
 from notifiers.telegram import TelegramNotifier
 
-__all__ = ["Notifier", "PushoverNotifier", "TelegramNotifier", "get_notifier"]
+__all__ = ["Notifier", "TelegramNotifier", "get_notifier"]
 
 
 def get_notifier(name: str | None = None) -> Notifier:
-    name = (name or wb_config.notifier_name()).lower()
-    if name == "telegram":
-        return TelegramNotifier()
-    return PushoverNotifier()   # default + fallback for any unknown value
+    """Return the notification transport. Single transport (Telegram); the
+    optional `name` is accepted for call-site compatibility but ignored."""
+    return TelegramNotifier()
