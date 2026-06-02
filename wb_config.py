@@ -31,9 +31,3 @@ def get(key: str, default=None):
     if not _loaded:
         load_env()
     return os.environ.get(key, default)
-
-
-def notifier_name() -> str:
-    """Which transport scheduled pushes use: 'telegram' or 'pushover'.
-    Defaults to 'pushover' so an unset/typo'd value is a safe no-change."""
-    return (get("NOTIFIER", "pushover") or "pushover").strip().lower()

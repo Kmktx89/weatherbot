@@ -32,7 +32,7 @@ def test_cmd_status_reads_artifacts(tmp_path, monkeypatch):
         encoding="utf-8")
     out = cmds.cmd_status()
     assert "weatherbot status" in out
-    assert "notifier:" in out
+    assert "notifier:" not in out
     assert "12 open events" in out
     assert "2026-06-01" in out          # health doc timestamp surfaced
 
@@ -209,4 +209,4 @@ def test_status_handler_answers_with_stub_token():
 
     asyncio.run(status_h.callback(FakeUpdate(), FakeCtx()))
     assert "weatherbot status" in captured["text"]
-    assert "notifier:" in captured["text"]
+    assert "notifier:" not in captured["text"]
