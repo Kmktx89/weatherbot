@@ -129,8 +129,8 @@ class _RecordingNotifier:
 
 
 def test_send_t24_alerts_routes_through_notifier(monkeypatch, tmp_path):
-    """Integration: the rerouted alert path builds the message and sends via
-    get_notifier() (not a hardcoded Pushover call), and dedup still works."""
+    """Integration: the alert path builds the message and sends via the
+    get_notifier() abstraction, and dedup still works."""
     monkeypatch.chdir(tmp_path)          # isolate alerts_sent_tickers.txt
     import notifiers
     import alerts
